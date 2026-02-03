@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import logging
+import subprocess
 import sys
 from pathlib import Path
 
@@ -164,6 +165,169 @@ async def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _get_compose_path(config_path: Path | None) -> Path:
+    """Get the docker-compose.yml path for mem0.
+
+    Args:
+        config_path: Path to smollama config file.
+
+    Returns:
+        Path to docker-compose.yml.
+    """
+    config = load_config(config_path)
+
+    # Compose file path is relative to the config file or cwd
+    compose_path = Path(config.mem0.compose_file)
+
+    if not compose_path.is_absolute():
+        if config_path:
+            compose_path = config_path.parent / compose_path
+        else:
+            compose_path = Path.cwd() / compose_path
+
+    return compose_path
+
+
+def cmd_mem0_start(args: argparse.Namespace) -> int:
+    """Start mem0 services via Docker Compose."""
+    compose_path = _get_compose_path(args.config)
+
+    if not compose_path.exists():
+        print(f"Error: Docker Compose file not found: {compose_path}", file=sys.stderr)
+        print("Make sure you're in the smollama directory or provide --config", file=sys.stderr)
+        return 1
+
+    print(f"Starting Mem0 services...")
+    print(f"Using: {compose_path}")
+
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(compose_path), "up", "-d"],
+        capture_output=False,
+    )
+
+    if result.returncode == 0:
+        print()
+        print("Mem0 services started successfully!")
+        print("  - Qdrant: http://localhost:6333")
+        print("  - Mem0:   http://localhost:8050")
+        print()
+        print("Check status with: smollama mem0 status")
+    else:
+        print("Failed to start Mem0 services", file=sys.stderr)
+
+    return result.returncode
+
+
+def cmd_mem0_stop(args: argparse.Namespace) -> int:
+    """Stop mem0 services."""
+    compose_path = _get_compose_path(args.config)
+
+    if not compose_path.exists():
+        print(f"Error: Docker Compose file not found: {compose_path}", file=sys.stderr)
+        return 1
+
+    print("Stopping Mem0 services...")
+
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(compose_path), "down"],
+        capture_output=False,
+    )
+
+    return result.returncode
+
+
+async def cmd_mem0_status(args: argparse.Namespace) -> int:
+    """Check mem0 services status."""
+    config = load_config(args.config)
+    compose_path = _get_compose_path(args.config)
+
+    print("Mem0 Status Check")
+    print("=================")
+    print()
+
+    # Check Docker containers
+    print("Docker Containers:")
+    if compose_path.exists():
+        result = subprocess.run(
+            ["docker", "compose", "-f", str(compose_path), "ps", "--format", "table {{.Name}}\t{{.Status}}"],
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip():
+            for line in result.stdout.strip().split("\n"):
+                print(f"  {line}")
+        else:
+            print("  No containers running")
+    else:
+        print(f"  Compose file not found: {compose_path}")
+
+    print()
+
+    # Check Qdrant health
+    print("Qdrant (localhost:6333):")
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("http://localhost:6333/health")
+            if resp.status_code == 200:
+                print("  Status: Healthy")
+            else:
+                print(f"  Status: Unhealthy (HTTP {resp.status_code})")
+    except Exception as e:
+        print(f"  Status: Not reachable ({e})")
+
+    print()
+
+    # Check Mem0 health
+    print(f"Mem0 ({config.mem0.server_url}):")
+    try:
+        from .mem0 import Mem0Client
+
+        client = Mem0Client(config.mem0.server_url)
+        if await client.health_check():
+            print("  Status: Healthy")
+        else:
+            print("  Status: Unhealthy")
+        await client.close()
+    except Exception as e:
+        print(f"  Status: Not reachable ({e})")
+
+    print()
+
+    # Show config
+    print("Configuration:")
+    print(f"  Enabled: {config.mem0.enabled}")
+    print(f"  Bridge enabled: {config.mem0.bridge_enabled}")
+    print(f"  Server URL: {config.mem0.server_url}")
+
+    return 0
+
+
+def cmd_mem0_logs(args: argparse.Namespace) -> int:
+    """Show mem0 service logs."""
+    compose_path = _get_compose_path(args.config)
+
+    if not compose_path.exists():
+        print(f"Error: Docker Compose file not found: {compose_path}", file=sys.stderr)
+        return 1
+
+    cmd = ["docker", "compose", "-f", str(compose_path), "logs"]
+
+    if args.follow:
+        cmd.append("-f")
+
+    if args.service:
+        cmd.append(args.service)
+
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        pass
+
+    return 0
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -202,6 +366,37 @@ def main() -> int:
     )
     dashboard_parser.set_defaults(func=cmd_dashboard)
 
+    # Mem0 commands
+    mem0_parser = subparsers.add_parser("mem0", help="Manage Mem0 semantic memory services")
+    mem0_subparsers = mem0_parser.add_subparsers(dest="mem0_command", help="Mem0 commands")
+
+    # mem0 start
+    mem0_start = mem0_subparsers.add_parser("start", help="Start Mem0 services")
+    mem0_start.set_defaults(func=cmd_mem0_start)
+
+    # mem0 stop
+    mem0_stop = mem0_subparsers.add_parser("stop", help="Stop Mem0 services")
+    mem0_stop.set_defaults(func=cmd_mem0_stop)
+
+    # mem0 status
+    mem0_status = mem0_subparsers.add_parser("status", help="Check Mem0 service status")
+    mem0_status.set_defaults(func=cmd_mem0_status, is_async=True)
+
+    # mem0 logs
+    mem0_logs = mem0_subparsers.add_parser("logs", help="View Mem0 service logs")
+    mem0_logs.add_argument(
+        "-f", "--follow",
+        action="store_true",
+        help="Follow log output",
+    )
+    mem0_logs.add_argument(
+        "service",
+        nargs="?",
+        choices=["qdrant", "mem0"],
+        help="Service to show logs for (default: all)",
+    )
+    mem0_logs.set_defaults(func=cmd_mem0_logs)
+
     args = parser.parse_args()
 
     setup_logging(args.verbose)
@@ -210,7 +405,20 @@ def main() -> int:
         parser.print_help()
         return 1
 
-    return asyncio.run(args.func(args))
+    # Handle mem0 subcommand requiring its own subcommand
+    if args.command == "mem0":
+        if not args.mem0_command:
+            mem0_parser.print_help()
+            return 1
+
+    # Check if function is async
+    func = args.func
+    is_async = getattr(args, "is_async", False) or asyncio.iscoroutinefunction(func)
+
+    if is_async:
+        return asyncio.run(func(args))
+    else:
+        return func(args)
 
 
 if __name__ == "__main__":

@@ -18,8 +18,9 @@ dependencies = [
 pi = ["RPi.GPIO", "gpiozero"]
 memory = ["sqlite-vec>=0.1.0"]
 dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
+mem0 = ["httpx>=0.24.0"]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx"]
-all = ["RPi.GPIO", "gpiozero", "sqlite-vec>=0.1.0", "fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
+all = ["RPi.GPIO", "gpiozero", "sqlite-vec>=0.1.0", "fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "httpx>=0.24.0"]
 
 [project.scripts]
 smollama = "smollama.__main__:main"

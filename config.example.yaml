@@ -40,3 +40,31 @@ agent:
     - Use get_recent_messages to see message history
 
     Be concise in your responses since you're running on limited hardware.
+
+# Memory system configuration
+memory:
+  db_path: "~/.smollama/memory.db"
+  embedding_provider: "ollama"
+  embedding_model: "all-minilm:l6-v2"
+  observation_enabled: true
+  observation_interval_minutes: 15
+  observation_lookback_minutes: 60
+  sensor_log_retention_days: 90
+
+# CRDT sync configuration (for multi-node setups)
+sync:
+  enabled: true
+  llama_url: ""  # URL of the Llama master node for syncing
+  sync_interval_minutes: 5
+  crdt_db_path: "~/.smollama/sync.db"
+
+# Mem0 semantic memory layer (Llama node only)
+# Provides cross-node semantic search via mem0 + Qdrant
+mem0:
+  enabled: false  # Enable on Llama (master) node
+  server_url: "http://localhost:8050"
+  bridge_enabled: false  # Only set true on Llama node
+  index_observations: true
+  index_memories: true
+  bridge_interval_seconds: 30
+  compose_file: "deploy/mem0/docker-compose.yml"

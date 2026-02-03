@@ -1,0 +1,36 @@
+# Mem0 server configuration for Smollama
+# This configures mem0 to use local Ollama for LLM and embeddings
+
+# Vector database configuration
+vector_store:
+  provider: qdrant
+  config:
+    host: qdrant
+    port: 6333
+
+# LLM configuration - use Ollama running on host
+llm:
+  provider: ollama
+  config:
+    model: llama3.2:1b
+    # host.docker.internal resolves to the host machine
+    base_url: http://host.docker.internal:11434
+
+# Embedding configuration - use Ollama
+embedder:
+  provider: ollama
+  config:
+    model: all-minilm:l6-v2
+    base_url: http://host.docker.internal:11434
+
+# Memory configuration
+memory:
+  # How to partition memories
+  partition_by:
+    - user_id    # Node name (e.g., "alpaca-living-room")
+    - agent_id   # Data type (e.g., "observations", "memories")
+
+# Server configuration
+server:
+  host: 0.0.0.0
+  port: 8050

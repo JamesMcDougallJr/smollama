@@ -86,6 +86,23 @@ class SyncConfig:
 
 
 @dataclass
+class Mem0Config:
+    """Configuration for Mem0 semantic memory layer.
+
+    Mem0 provides cross-node semantic search on the Llama (master) node.
+    The bridge indexes observations and memories from the CRDT log.
+    """
+
+    enabled: bool = False
+    server_url: str = "http://localhost:8050"
+    bridge_enabled: bool = False  # Only true on Llama node
+    index_observations: bool = True
+    index_memories: bool = True
+    bridge_interval_seconds: int = 30
+    compose_file: str = "deploy/mem0/docker-compose.yml"
+
+
+@dataclass
 class Config:
     node: NodeConfig = field(default_factory=NodeConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
@@ -94,6 +111,7 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
+    mem0: Mem0Config = field(default_factory=Mem0Config)
 
 
 def _get_env(key: str, default: Any = None) -> Any:
@@ -148,6 +166,14 @@ def _apply_env_overrides(config: Config) -> Config:
         config.sync.llama_url = llama_url
     if sync_interval := _get_env("SYNC_INTERVAL"):
         config.sync.sync_interval_minutes = int(sync_interval)
+
+    # Mem0 overrides
+    if mem0_enabled := _get_env("MEM0_ENABLED"):
+        config.mem0.enabled = mem0_enabled.lower() in ("true", "1", "yes")
+    if mem0_url := _get_env("MEM0_SERVER_URL"):
+        config.mem0.server_url = mem0_url
+    if mem0_bridge := _get_env("MEM0_BRIDGE_ENABLED"):
+        config.mem0.bridge_enabled = mem0_bridge.lower() in ("true", "1", "yes")
 
     return config
 
@@ -284,6 +310,29 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     batch_size=sync_data.get("batch_size", config.sync.batch_size),
                     crdt_db_path=sync_data.get(
                         "crdt_db_path", config.sync.crdt_db_path
+                    ),
+                )
+
+            # Parse mem0 config
+            if "mem0" in data:
+                mem0_data = data["mem0"]
+                config.mem0 = Mem0Config(
+                    enabled=mem0_data.get("enabled", config.mem0.enabled),
+                    server_url=mem0_data.get("server_url", config.mem0.server_url),
+                    bridge_enabled=mem0_data.get(
+                        "bridge_enabled", config.mem0.bridge_enabled
+                    ),
+                    index_observations=mem0_data.get(
+                        "index_observations", config.mem0.index_observations
+                    ),
+                    index_memories=mem0_data.get(
+                        "index_memories", config.mem0.index_memories
+                    ),
+                    bridge_interval_seconds=mem0_data.get(
+                        "bridge_interval_seconds", config.mem0.bridge_interval_seconds
+                    ),
+                    compose_file=mem0_data.get(
+                        "compose_file", config.mem0.compose_file
                     ),
                 )
 

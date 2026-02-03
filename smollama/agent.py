@@ -19,6 +19,8 @@ from .readings import GPIOReadingProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
+from .mem0 import Mem0Client, Mem0Bridge, CrossNodeRecallTool
+from .sync.crdt_log import CRDTLog
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,19 @@ class Agent:
                 lookback_minutes=config.memory.observation_lookback_minutes,
             )
 
+        # Initialize Mem0 components (for Llama node cross-node search)
+        self._mem0_client: Mem0Client | None = None
+        self._mem0_bridge: Mem0Bridge | None = None
+        if config.mem0.enabled:
+            self._mem0_client = Mem0Client(config.mem0.server_url)
+            if config.mem0.bridge_enabled:
+                # Bridge requires CRDT log access
+                crdt_log = CRDTLog(
+                    db_path=config.sync.crdt_db_path,
+                    node_id=config.node.name,
+                )
+                self._mem0_bridge = Mem0Bridge(config.mem0, crdt_log)
+
         # Initialize tool registry with unified reading tools
         self._tools = ToolRegistry()
 
@@ -82,6 +97,10 @@ class Agent:
         # MQTT tools
         self._tools.register(PublishTool(self._mqtt))
         self._tools.register(GetRecentMessagesTool(self._mqtt))
+
+        # Mem0 cross-node search tool (only when mem0 enabled)
+        if self._mem0_client:
+            self._tools.register(CrossNodeRecallTool(self._mem0_client))
 
         # Conversation history for context
         self._system_message = {
@@ -110,6 +129,10 @@ class Agent:
         if self._observation_loop:
             await self._observation_loop.start()
 
+        # Start Mem0 bridge if enabled (Llama node only)
+        if self._mem0_bridge:
+            await self._mem0_bridge.start()
+
         self._running = True
         logger.info("Agent started successfully")
 
@@ -124,6 +147,14 @@ class Agent:
         # Stop observation loop
         if self._observation_loop:
             await self._observation_loop.stop()
+
+        # Stop Mem0 bridge
+        if self._mem0_bridge:
+            await self._mem0_bridge.stop()
+
+        # Close Mem0 client
+        if self._mem0_client:
+            await self._mem0_client.close()
 
         # Disconnect from services
         await self._mqtt.disconnect()
