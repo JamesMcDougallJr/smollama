@@ -1,0 +1,24 @@
+{% if stats %}
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <dt class="text-sm font-medium text-gray-400">Readings</dt>
+    <dd class="mt-2 text-3xl font-semibold text-green-400">{{ stats.readings_count }}</dd>
+</div>
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <dt class="text-sm font-medium text-gray-400">Observations</dt>
+    <dd class="mt-2 text-3xl font-semibold text-blue-400">{{ stats.observations_count }}</dd>
+</div>
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <dt class="text-sm font-medium text-gray-400">Memories</dt>
+    <dd class="mt-2 text-3xl font-semibold text-purple-400">{{ stats.memories_count }}</dd>
+</div>
+<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <dt class="text-sm font-medium text-gray-400">Vector Search</dt>
+    <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-green-400{% else %}text-yellow-400{% endif %}">
+        {{ 'Enabled' if stats.vector_search_enabled else 'Disabled' }}
+    </dd>
+</div>
+{% else %}
+<div class="col-span-4 text-center text-gray-500 py-8">
+    <p>No stats available</p>
+</div>
+{% endif %}

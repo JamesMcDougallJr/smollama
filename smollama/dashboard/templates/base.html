@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Smollama{% endblock %} - {{ node_name }}</title>
+
+    <!-- Tailwind CSS from CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+
+    <style>
+        /* Custom styles */
+        .htmx-indicator {
+            opacity: 0;
+            transition: opacity 200ms ease-in;
+        }
+        .htmx-request .htmx-indicator {
+            opacity: 1;
+        }
+        .htmx-request.htmx-indicator {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center">
+                    <span class="text-xl font-bold text-green-400">🦙 {{ node_name }}</span>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'index' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                        Dashboard
+                    </a>
+                    <a href="/readings" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'readings' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                        Readings
+                    </a>
+                    <a href="/observations" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'observations' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                        Observations
+                    </a>
+                    <a href="/memories" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'memories' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                        Memories
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-sm">
+            Smollama Dashboard • Running on {{ node_name }}
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Observations{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Header -->
+    <div>
+        <h1 class="text-3xl font-bold text-white">Observations</h1>
+        <p class="mt-2 text-gray-400">LLM-generated insights and detected patterns</p>
+    </div>
+
+    <!-- Search -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <input type="text"
+               name="query"
+               placeholder="Search observations..."
+               hx-get="/htmx/observations"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#observations-list"
+               hx-include="this"
+               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+
+    <!-- Observations List -->
+    <div id="observations-list" class="space-y-4">
+        {% if observations %}
+            {% for obs in observations %}
+            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+                <div class="flex items-start justify-between">
+                    <div class="flex-1">
+                        <p class="text-white">{{ obs.text }}</p>
+                        <div class="mt-3 flex items-center space-x-4 text-sm text-gray-400">
+                            <span>{{ obs.timestamp }}</span>
+                            <span class="px-2 py-0.5 rounded
+                                {% if obs.type == 'anomaly' %}bg-red-900 text-red-200
+                                {% elif obs.type == 'pattern' %}bg-purple-900 text-purple-200
+                                {% elif obs.type == 'status' %}bg-green-900 text-green-200
+                                {% else %}bg-gray-700 text-gray-300{% endif %}">
+                                {{ obs.type }}
+                            </span>
+                            <span>Confidence: {{ (obs.confidence * 100)|int }}%</span>
+                        </div>
+                    </div>
+                    {% if obs.similarity %}
+                    <div class="ml-4 text-sm text-gray-500">
+                        {{ (obs.similarity * 100)|int }}% match
+                    </div>
+                    {% endif %}
+                </div>
+                {% if obs.related_sources %}
+                <div class="mt-3 flex flex-wrap gap-2">
+                    {% for source in obs.related_sources %}
+                    <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ source }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-center text-gray-500 py-8">
+                <p>No observations yet</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

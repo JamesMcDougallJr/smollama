@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "smollama"
+version = "0.1.0"
+description = "A distributed LLM coordination system for Raspberry Pi and small computers"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "ollama>=0.4",
+    "paho-mqtt>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+pi = ["RPi.GPIO", "gpiozero"]
+memory = ["sqlite-vec>=0.1.0"]
+dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx"]
+all = ["RPi.GPIO", "gpiozero", "sqlite-vec>=0.1.0", "fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
+
+[project.scripts]
+smollama = "smollama.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["smollama"]

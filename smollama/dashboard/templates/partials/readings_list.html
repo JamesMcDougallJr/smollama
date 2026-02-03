@@ -1,0 +1,26 @@
+{% if readings %}
+    {% for reading in readings %}
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-gray-400">{{ reading.full_id }}</span>
+            {% if reading.full_id.startswith('system:') %}
+            <span class="px-2 py-1 text-xs rounded bg-blue-900 text-blue-200">System</span>
+            {% elif reading.full_id.startswith('gpio:') %}
+            <span class="px-2 py-1 text-xs rounded bg-green-900 text-green-200">GPIO</span>
+            {% else %}
+            <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ reading.full_id.split(':')[0] }}</span>
+            {% endif %}
+        </div>
+        <div class="mt-4">
+            <span class="text-4xl font-bold text-white">{{ reading.value }}</span>
+            {% if reading.unit %}
+            <span class="text-lg text-gray-400 ml-1">{{ reading.unit }}</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="col-span-3 text-center text-gray-500 py-8">
+        <p>No readings available</p>
+    </div>
+{% endif %}

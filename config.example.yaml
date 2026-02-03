@@ -1,0 +1,42 @@
+node:
+  name: "pi-living-room"
+
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama3.2:1b"  # Small model for Pi
+
+mqtt:
+  broker: "192.168.1.100"
+  port: 1883
+  # Optional auth
+  # username: "smollama"
+  # password: "secret"
+  topics:
+    subscribe:
+      - "smollama/broadcast"
+      - "smollama/pi-living-room/#"
+    publish_prefix: "smollama/pi-living-room"
+
+gpio:
+  mock: false  # Set to true for development without Pi hardware
+  pins:
+    - pin: 17
+      name: "motion_sensor"
+      mode: "input"
+    - pin: 27
+      name: "door_switch"
+      mode: "input"
+
+agent:
+  system_prompt: |
+    You are a home automation assistant running on a Raspberry Pi.
+    You can read GPIO sensors and communicate with other nodes via MQTT.
+
+    When you receive messages, respond helpfully and use your tools when needed:
+    - Use read_gpio to check sensor states
+    - Use list_gpio to see all available sensors
+    - Use publish to send messages to other nodes
+    - Use get_recent_messages to see message history
+
+    Be concise in your responses since you're running on limited hardware.

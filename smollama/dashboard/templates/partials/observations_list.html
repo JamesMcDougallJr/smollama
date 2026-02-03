@@ -1,0 +1,38 @@
+{% if observations %}
+    {% for obs in observations %}
+    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+        <div class="flex items-start justify-between">
+            <div class="flex-1">
+                <p class="text-white">{{ obs.text }}</p>
+                <div class="mt-3 flex items-center space-x-4 text-sm text-gray-400">
+                    <span>{{ obs.timestamp }}</span>
+                    <span class="px-2 py-0.5 rounded
+                        {% if obs.type == 'anomaly' %}bg-red-900 text-red-200
+                        {% elif obs.type == 'pattern' %}bg-purple-900 text-purple-200
+                        {% elif obs.type == 'status' %}bg-green-900 text-green-200
+                        {% else %}bg-gray-700 text-gray-300{% endif %}">
+                        {{ obs.type }}
+                    </span>
+                    <span>Confidence: {{ (obs.confidence * 100)|int }}%</span>
+                </div>
+            </div>
+            {% if obs.similarity %}
+            <div class="ml-4 text-sm text-gray-500">
+                {{ (obs.similarity * 100)|int }}% match
+            </div>
+            {% endif %}
+        </div>
+        {% if obs.related_sources %}
+        <div class="mt-3 flex flex-wrap gap-2">
+            {% for source in obs.related_sources %}
+            <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ source }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="text-center text-gray-500 py-8">
+        <p>No observations found</p>
+    </div>
+{% endif %}

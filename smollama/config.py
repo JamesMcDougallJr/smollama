@@ -1,0 +1,304 @@
+"""Configuration loading for Smollama."""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+@dataclass
+class NodeConfig:
+    name: str = "smollama-node"
+
+
+@dataclass
+class OllamaConfig:
+    host: str = "localhost"
+    port: int = 11434
+    model: str = "llama3.2:1b"
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+
+@dataclass
+class MQTTTopicsConfig:
+    subscribe: list[str] = field(default_factory=list)
+    publish_prefix: str = "smollama"
+
+
+@dataclass
+class MQTTConfig:
+    broker: str = "localhost"
+    port: int = 1883
+    topics: MQTTTopicsConfig = field(default_factory=MQTTTopicsConfig)
+    username: str | None = None
+    password: str | None = None
+
+
+@dataclass
+class GPIOPinConfig:
+    pin: int
+    name: str
+    mode: str = "input"
+
+
+@dataclass
+class GPIOConfig:
+    pins: list[GPIOPinConfig] = field(default_factory=list)
+    mock: bool = False
+
+
+@dataclass
+class AgentConfig:
+    system_prompt: str = (
+        "You are a home automation assistant running on a Raspberry Pi. "
+        "You can read GPIO sensors and communicate with other nodes via MQTT."
+    )
+
+
+@dataclass
+class MemoryConfig:
+    """Configuration for the memory system."""
+
+    db_path: str = "~/.smollama/memory.db"
+    embedding_provider: str = "ollama"
+    embedding_model: str = "all-minilm:l6-v2"
+    observation_enabled: bool = True
+    observation_interval_minutes: int = 15
+    observation_lookback_minutes: int = 60
+    sensor_log_retention_days: int = 90
+
+
+@dataclass
+class SyncConfig:
+    """Configuration for CRDT sync infrastructure."""
+
+    enabled: bool = True
+    llama_url: str = ""  # URL of the main Llama node
+    sync_interval_minutes: int = 5
+    retry_max_attempts: int = 3
+    batch_size: int = 100
+    crdt_db_path: str = "~/.smollama/sync.db"
+
+
+@dataclass
+class Config:
+    node: NodeConfig = field(default_factory=NodeConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    mqtt: MQTTConfig = field(default_factory=MQTTConfig)
+    gpio: GPIOConfig = field(default_factory=GPIOConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    sync: SyncConfig = field(default_factory=SyncConfig)
+
+
+def _get_env(key: str, default: Any = None) -> Any:
+    """Get environment variable with SMOLLAMA_ prefix."""
+    return os.environ.get(f"SMOLLAMA_{key}", default)
+
+
+def _apply_env_overrides(config: Config) -> Config:
+    """Apply environment variable overrides to config."""
+    # Node overrides
+    if name := _get_env("NODE_NAME"):
+        config.node.name = name
+
+    # Ollama overrides
+    if host := _get_env("OLLAMA_HOST"):
+        config.ollama.host = host
+    if port := _get_env("OLLAMA_PORT"):
+        config.ollama.port = int(port)
+    if model := _get_env("OLLAMA_MODEL"):
+        config.ollama.model = model
+
+    # MQTT overrides
+    if broker := _get_env("MQTT_BROKER"):
+        config.mqtt.broker = broker
+    if port := _get_env("MQTT_PORT"):
+        config.mqtt.port = int(port)
+    if username := _get_env("MQTT_USERNAME"):
+        config.mqtt.username = username
+    if password := _get_env("MQTT_PASSWORD"):
+        config.mqtt.password = password
+
+    # GPIO mock mode
+    if mock := _get_env("GPIO_MOCK"):
+        config.gpio.mock = mock.lower() in ("true", "1", "yes")
+
+    # Memory overrides
+    if db_path := _get_env("MEMORY_DB_PATH"):
+        config.memory.db_path = db_path
+    if embedding_provider := _get_env("MEMORY_EMBEDDING_PROVIDER"):
+        config.memory.embedding_provider = embedding_provider
+    if embedding_model := _get_env("MEMORY_EMBEDDING_MODEL"):
+        config.memory.embedding_model = embedding_model
+    if obs_enabled := _get_env("MEMORY_OBSERVATION_ENABLED"):
+        config.memory.observation_enabled = obs_enabled.lower() in ("true", "1", "yes")
+    if obs_interval := _get_env("MEMORY_OBSERVATION_INTERVAL"):
+        config.memory.observation_interval_minutes = int(obs_interval)
+
+    # Sync overrides
+    if sync_enabled := _get_env("SYNC_ENABLED"):
+        config.sync.enabled = sync_enabled.lower() in ("true", "1", "yes")
+    if llama_url := _get_env("SYNC_LLAMA_URL"):
+        config.sync.llama_url = llama_url
+    if sync_interval := _get_env("SYNC_INTERVAL"):
+        config.sync.sync_interval_minutes = int(sync_interval)
+
+    return config
+
+
+def _parse_mqtt_topics(data: dict) -> MQTTTopicsConfig:
+    """Parse MQTT topics configuration."""
+    return MQTTTopicsConfig(
+        subscribe=data.get("subscribe", []),
+        publish_prefix=data.get("publish_prefix", "smollama"),
+    )
+
+
+def _parse_gpio_pins(data: list) -> list[GPIOPinConfig]:
+    """Parse GPIO pin configurations."""
+    pins = []
+    for pin_data in data:
+        pins.append(
+            GPIOPinConfig(
+                pin=pin_data["pin"],
+                name=pin_data["name"],
+                mode=pin_data.get("mode", "input"),
+            )
+        )
+    return pins
+
+
+def load_config(config_path: str | Path | None = None) -> Config:
+    """Load configuration from YAML file with environment variable overrides.
+
+    Args:
+        config_path: Path to YAML config file. If None, uses default config.
+
+    Returns:
+        Loaded and validated Config object.
+    """
+    config = Config()
+
+    if config_path:
+        path = Path(config_path)
+        if path.exists():
+            with open(path) as f:
+                data = yaml.safe_load(f) or {}
+
+            # Parse node config
+            if "node" in data:
+                config.node = NodeConfig(
+                    name=data["node"].get("name", config.node.name)
+                )
+
+            # Parse ollama config
+            if "ollama" in data:
+                ollama_data = data["ollama"]
+                config.ollama = OllamaConfig(
+                    host=ollama_data.get("host", config.ollama.host),
+                    port=ollama_data.get("port", config.ollama.port),
+                    model=ollama_data.get("model", config.ollama.model),
+                )
+
+            # Parse MQTT config
+            if "mqtt" in data:
+                mqtt_data = data["mqtt"]
+                topics = MQTTTopicsConfig()
+                if "topics" in mqtt_data:
+                    topics = _parse_mqtt_topics(mqtt_data["topics"])
+
+                config.mqtt = MQTTConfig(
+                    broker=mqtt_data.get("broker", config.mqtt.broker),
+                    port=mqtt_data.get("port", config.mqtt.port),
+                    topics=topics,
+                    username=mqtt_data.get("username"),
+                    password=mqtt_data.get("password"),
+                )
+
+            # Parse GPIO config
+            if "gpio" in data:
+                gpio_data = data["gpio"]
+                pins = []
+                if "pins" in gpio_data:
+                    pins = _parse_gpio_pins(gpio_data["pins"])
+
+                config.gpio = GPIOConfig(
+                    pins=pins,
+                    mock=gpio_data.get("mock", False),
+                )
+
+            # Parse agent config
+            if "agent" in data:
+                config.agent = AgentConfig(
+                    system_prompt=data["agent"].get(
+                        "system_prompt", config.agent.system_prompt
+                    )
+                )
+
+            # Parse memory config
+            if "memory" in data:
+                mem_data = data["memory"]
+                config.memory = MemoryConfig(
+                    db_path=mem_data.get("db_path", config.memory.db_path),
+                    embedding_provider=mem_data.get(
+                        "embedding_provider", config.memory.embedding_provider
+                    ),
+                    embedding_model=mem_data.get(
+                        "embedding_model", config.memory.embedding_model
+                    ),
+                    observation_enabled=mem_data.get(
+                        "observation_enabled", config.memory.observation_enabled
+                    ),
+                    observation_interval_minutes=mem_data.get(
+                        "observation_interval_minutes",
+                        config.memory.observation_interval_minutes,
+                    ),
+                    observation_lookback_minutes=mem_data.get(
+                        "observation_lookback_minutes",
+                        config.memory.observation_lookback_minutes,
+                    ),
+                    sensor_log_retention_days=mem_data.get(
+                        "sensor_log_retention_days",
+                        config.memory.sensor_log_retention_days,
+                    ),
+                )
+
+            # Parse sync config
+            if "sync" in data:
+                sync_data = data["sync"]
+                config.sync = SyncConfig(
+                    enabled=sync_data.get("enabled", config.sync.enabled),
+                    llama_url=sync_data.get("llama_url", config.sync.llama_url),
+                    sync_interval_minutes=sync_data.get(
+                        "sync_interval_minutes", config.sync.sync_interval_minutes
+                    ),
+                    retry_max_attempts=sync_data.get(
+                        "retry_max_attempts", config.sync.retry_max_attempts
+                    ),
+                    batch_size=sync_data.get("batch_size", config.sync.batch_size),
+                    crdt_db_path=sync_data.get(
+                        "crdt_db_path", config.sync.crdt_db_path
+                    ),
+                )
+
+    # Apply environment variable overrides
+    config = _apply_env_overrides(config)
+
+    # Set default subscribe topics if none configured
+    if not config.mqtt.topics.subscribe:
+        config.mqtt.topics.subscribe = [
+            "smollama/broadcast",
+            f"smollama/{config.node.name}/#",
+        ]
+
+    # Set default publish prefix
+    if config.mqtt.topics.publish_prefix == "smollama":
+        config.mqtt.topics.publish_prefix = f"smollama/{config.node.name}"
+
+    return config

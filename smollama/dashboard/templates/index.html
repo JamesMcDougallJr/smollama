@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Header -->
+    <div>
+        <h1 class="text-3xl font-bold text-white">Dashboard</h1>
+        <p class="mt-2 text-gray-400">Overview of {{ node_name }}</p>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+         hx-get="/htmx/stats"
+         hx-trigger="every 10s"
+         hx-swap="innerHTML">
+        {% if stats %}
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <dt class="text-sm font-medium text-gray-400">Readings</dt>
+            <dd class="mt-2 text-3xl font-semibold text-green-400">{{ stats.readings_count }}</dd>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <dt class="text-sm font-medium text-gray-400">Observations</dt>
+            <dd class="mt-2 text-3xl font-semibold text-blue-400">{{ stats.observations_count }}</dd>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <dt class="text-sm font-medium text-gray-400">Memories</dt>
+            <dd class="mt-2 text-3xl font-semibold text-purple-400">{{ stats.memories_count }}</dd>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <dt class="text-sm font-medium text-gray-400">Vector Search</dt>
+            <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-green-400{% else %}text-yellow-400{% endif %}">
+                {{ 'Enabled' if stats.vector_search_enabled else 'Disabled' }}
+            </dd>
+        </div>
+        {% else %}
+        <div class="col-span-4 text-center text-gray-500 py-8">
+            <p>No memory store connected</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Quick Links -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <a href="/readings" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-green-500 transition-colors">
+            <h3 class="text-lg font-semibold text-white">Live Readings</h3>
+            <p class="mt-2 text-gray-400">View current sensor values and system metrics</p>
+        </a>
+        <a href="/observations" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-blue-500 transition-colors">
+            <h3 class="text-lg font-semibold text-white">Observations</h3>
+            <p class="mt-2 text-gray-400">Browse LLM-generated insights and patterns</p>
+        </a>
+        <a href="/memories" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-purple-500 transition-colors">
+            <h3 class="text-lg font-semibold text-white">Memories</h3>
+            <p class="mt-2 text-gray-400">Explore persistent facts and learned information</p>
+        </a>
+    </div>
+</div>
+{% endblock %}
