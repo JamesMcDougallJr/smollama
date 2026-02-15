@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..config import Config
+from ..gpio_reader import GPIOReader, GPIO_AVAILABLE
 from ..memory import LocalStore
 from ..readings import ReadingManager
 
@@ -24,6 +25,7 @@ def create_app(
     config: Config,
     store: LocalStore | None = None,
     readings: ReadingManager | None = None,
+    gpio_reader: GPIOReader | None = None,
 ) -> FastAPI:
     """Create the FastAPI dashboard application.
 
@@ -31,6 +33,7 @@ def create_app(
         config: Application configuration.
         store: Optional LocalStore for memory access.
         readings: Optional ReadingManager for live readings.
+        gpio_reader: Optional GPIOReader for GPIO mode toggling.
 
     Returns:
         Configured FastAPI application.
@@ -45,6 +48,7 @@ def create_app(
     app.state.config = config
     app.state.store = store
     app.state.readings = readings
+    app.state.gpio_reader = gpio_reader
 
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -226,9 +230,10 @@ def create_app(
             except Exception:
                 pass
 
+        gpio_mock = gpio_reader.is_mock_mode if gpio_reader else True
         return templates.TemplateResponse(
             "partials/readings_list.html",
-            {"request": request, "readings": current_readings},
+            {"request": request, "readings": current_readings, "gpio_mock": gpio_mock},
         )
 
     @app.get("/htmx/observations", response_class=HTMLResponse)
@@ -241,6 +246,50 @@ def create_app(
         return templates.TemplateResponse(
             "partials/observations_list.html",
             {"request": request, "observations": observations},
+        )
+
+    @app.get("/htmx/gpio-toggle", response_class=HTMLResponse)
+    async def htmx_gpio_toggle(request: Request):
+        """HTMX partial for GPIO mode toggle."""
+        has_gpio = gpio_reader is not None and len(gpio_reader.configured_pins) > 0
+        mock_mode = gpio_reader.is_mock_mode if gpio_reader else True
+        return templates.TemplateResponse(
+            "partials/gpio_toggle.html",
+            {
+                "request": request,
+                "has_gpio": has_gpio,
+                "mock_mode": mock_mode,
+                "gpio_available": GPIO_AVAILABLE,
+                "error": None,
+            },
+        )
+
+    @app.post("/api/gpio/mode", response_class=HTMLResponse)
+    async def api_gpio_mode(request: Request):
+        """Toggle GPIO mock/real mode."""
+        form = await request.form()
+        want_mock = form.get("mock", "true").lower() == "true"
+
+        has_gpio = gpio_reader is not None and len(gpio_reader.configured_pins) > 0
+        error = None
+        mock_mode = True
+
+        if gpio_reader:
+            result = gpio_reader.set_mock_mode(want_mock)
+            mock_mode = result["mock_mode"]
+            error = result["error"]
+        else:
+            error = "No GPIO reader configured"
+
+        return templates.TemplateResponse(
+            "partials/gpio_toggle.html",
+            {
+                "request": request,
+                "has_gpio": has_gpio,
+                "mock_mode": mock_mode,
+                "gpio_available": GPIO_AVAILABLE,
+                "error": error,
+            },
         )
 
     @app.get("/htmx/stats", response_class=HTMLResponse)

@@ -36,3 +36,15 @@ Thumbs.db
 .claude/
 CLAUDE.md
 **/CLAUDE.md
+
+.gitconfig
+.gitmodules
+.bash_profile
+.bashrc
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.vscode
+.zprofiled
+.zshrc

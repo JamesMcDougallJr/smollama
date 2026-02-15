@@ -57,16 +57,21 @@ class GPIOReader:
             return
 
         # Set up real GPIO
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
+        try:
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
 
-        for pin_num, pin_config in self._pins.items():
-            if pin_config.mode == "input":
-                GPIO.setup(pin_num, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-                logger.debug(f"Set up pin {pin_num} ({pin_config.name}) as input")
+            for pin_num, pin_config in self._pins.items():
+                if pin_config.mode == "input":
+                    GPIO.setup(pin_num, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+                    logger.debug(f"Set up pin {pin_num} ({pin_config.name}) as input")
 
-        self._initialized = True
-        logger.info(f"GPIO initialized with {len(self._pins)} pins")
+            self._initialized = True
+            logger.info(f"GPIO initialized with {len(self._pins)} pins")
+        except Exception as e:
+            logger.warning(f"Real GPIO setup failed ({e}), falling back to mock mode")
+            self._mock_mode = True
+            self._initialized = True
 
     def cleanup(self) -> None:
         """Clean up GPIO resources."""
@@ -216,6 +221,52 @@ class GPIOReader:
     def is_mock_mode(self) -> bool:
         """Check if running in mock mode."""
         return self._mock_mode
+
+    def set_mock_mode(self, mock: bool) -> dict:
+        """Toggle between mock and real GPIO mode at runtime.
+
+        Args:
+            mock: True to switch to mock mode, False for real GPIO.
+
+        Returns:
+            Dict with mock_mode, changed, and error keys.
+        """
+        if mock == self._mock_mode:
+            return {"mock_mode": self._mock_mode, "changed": False, "error": None}
+
+        if not mock:
+            # Switching mock -> real
+            if not GPIO_AVAILABLE:
+                return {
+                    "mock_mode": self._mock_mode,
+                    "changed": False,
+                    "error": "RPi.GPIO not available on this system",
+                }
+            try:
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                for pin_num, pin_config in self._pins.items():
+                    if pin_config.mode == "input":
+                        GPIO.setup(pin_num, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+                self._mock_mode = False
+                logger.info("Switched to real GPIO mode")
+                return {"mock_mode": False, "changed": True, "error": None}
+            except Exception as e:
+                logger.warning(f"Failed to switch to real GPIO: {e}")
+                return {
+                    "mock_mode": self._mock_mode,
+                    "changed": False,
+                    "error": str(e),
+                }
+        else:
+            # Switching real -> mock
+            try:
+                GPIO.cleanup()
+            except Exception:
+                pass
+            self._mock_mode = True
+            logger.info("Switched to mock GPIO mode")
+            return {"mock_mode": True, "changed": True, "error": None}
 
     @property
     def configured_pins(self) -> list[GPIOPinConfig]:

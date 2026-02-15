@@ -6,7 +6,11 @@
             {% if reading.full_id.startswith('system:') %}
             <span class="px-2 py-1 text-xs rounded bg-blue-900 text-blue-200">System</span>
             {% elif reading.full_id.startswith('gpio:') %}
+            {% if gpio_mock is defined and gpio_mock %}
+            <span class="px-2 py-1 text-xs rounded bg-yellow-900 text-yellow-200">GPIO (Mock)</span>
+            {% else %}
             <span class="px-2 py-1 text-xs rounded bg-green-900 text-green-200">GPIO</span>
+            {% endif %}
             {% else %}
             <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ reading.full_id.split(':')[0] }}</span>
             {% endif %}

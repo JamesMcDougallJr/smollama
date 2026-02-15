@@ -32,6 +32,7 @@
             <div class="flex items-center justify-between h-16">
                 <div class="flex items-center">
                     <span class="text-xl font-bold text-green-400">🦙 {{ node_name }}</span>
+                    <div class="ml-6" hx-get="/htmx/gpio-toggle" hx-trigger="load" hx-swap="innerHTML"></div>
                 </div>
                 <div class="flex space-x-4">
                     <a href="/" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'index' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">

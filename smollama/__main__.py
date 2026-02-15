@@ -83,6 +83,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     readings.register(SystemReadingProvider())
 
     # Optionally add GPIO if configured
+    gpio = None
     if config.gpio.pins:
         from .gpio_reader import GPIOReader
         from .readings import GPIOReadingProvider
@@ -94,7 +95,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     print(f"Node: {config.node.name}")
     print(f"URL: http://0.0.0.0:{args.port}")
 
-    app = create_app(config, store=store, readings=readings)
+    app = create_app(config, store=store, readings=readings, gpio_reader=gpio)
 
     try:
         verbose = getattr(args, "verbose", False)
