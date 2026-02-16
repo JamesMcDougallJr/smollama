@@ -20,6 +20,89 @@ Designed for distributed home automation, environmental monitoring, and edge AI 
 - MQTT broker (e.g., Mosquitto)
 - Optional: Raspberry Pi with GPIO pins
 
+## Quick Start
+
+### Automated Installation
+
+The fastest way to get started is with the installation script:
+
+```bash
+# Clone repository
+git clone <repo-url>
+cd smollama
+
+# One-line install (recommended)
+./scripts/install.sh
+
+# Or for development
+./scripts/install.sh --dev
+
+# Or for minimal installation (core only)
+./scripts/install.sh --minimal
+
+# Non-interactive mode (for CI/automation)
+./scripts/install.sh --non-interactive
+```
+
+The install script will:
+- Detect your platform (macOS, Debian, Ubuntu)
+- Install Python 3.10+ if needed
+- Install UV (fast package manager) or use pip as fallback
+- Install smollama and dependencies
+- Optionally install Ollama and Mosquitto
+- Pull the default LLM model (llama3.2:1b)
+- Create a default config.yaml
+
+### Start Services
+
+After installation, use the start script to ensure all services are running:
+
+```bash
+# Start Ollama, MQTT, and smollama agent
+./scripts/start.sh
+
+# With verbose logging
+./scripts/start.sh -v
+
+# With custom options (passed to smollama run)
+./scripts/start.sh --host 0.0.0.0 --log-level debug
+```
+
+The start script will:
+- Check if Ollama is running (auto-start if needed)
+- Check if MQTT broker is running (auto-start if needed)
+- Verify connectivity with `smollama status`
+- Launch the smollama agent
+
+### Raspberry Pi Setup
+
+For production deployment on Raspberry Pi:
+
+```bash
+# One-time Pi configuration (requires sudo)
+sudo ./scripts/setup-pi.sh
+
+# Manage the service
+sudo systemctl status smollama
+sudo systemctl start smollama
+sudo systemctl stop smollama
+sudo systemctl restart smollama
+
+# View logs
+journalctl -u smollama -f                # Follow logs in real-time
+journalctl -u smollama -n 100            # Last 100 lines
+journalctl -u smollama --since today     # Today's logs
+```
+
+The Pi setup script will:
+- Verify Raspberry Pi hardware
+- Enable GPIO interfaces (SPI, I2C)
+- Install system dependencies (GPIO libraries, MQTT broker)
+- Install smollama with Pi-specific extras
+- Create systemd service for auto-start on boot
+- Configure log rotation (journal + logrotate)
+- Display network info and dashboard URL
+
 ## Installation
 
 First, install UV (recommended) or ensure you have pip available:
