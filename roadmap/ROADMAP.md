@@ -7,15 +7,15 @@
 | [Quick Wins](quick-wins.md) | ✅ Complete | Trivial-Small | CLI flags, health endpoint, status improvements |
 | [UV Migration](uv-migration.md) | ✅ Complete | Small | Migrate from pip to UV for faster installs and dependency resolution |
 | [Install Scripts](install-scripts.md) | ✅ Complete | Medium | `install.sh`, `start.sh`, `setup-pi.sh` |
+| [Plugin System](plugin-system.md) | ✅ Complete | Large | `SensorPlugin` / `ToolPlugin` interfaces, plugin loader, discovery |
 | [Improvements](improvements.md) | Not started | Medium | Dashboard, memory, agent, config, MQTT enhancements |
-| [Plugin System](plugin-system.md) | Not started | Large | `SensorPlugin` / `ToolPlugin` interfaces, plugin loader, discovery |
 | [Future Directions](future-directions.md) | Not started | Large | Multi-node aggregation, WebSocket, mDNS, graph memory |
 | [OpenClaw Integration](OPENCLAW_INTEGRATION.md) | Not started | Medium-Large | Gateway client, bidirectional tools, memory bridge, messaging |
 
 ## Progress
 
-- 3 / 7 plans started
-- 3 / 7 plans completed
+- 4 / 7 plans started
+- 4 / 7 plans completed
 
 ## Plan Details
 

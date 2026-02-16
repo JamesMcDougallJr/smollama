@@ -2,8 +2,10 @@
 
 A structured plugin system to make adding new sensor types straightforward.
 
-- **Status**: Not started
+- **Status**: ✅ Complete
 - **Effort**: Large (multi-session)
+- **Completed**: 2026-02-16
+- **Implementation**: See `smollama/plugins/` and `docs/plugin-development.md`
 
 ## Plugin Directory
 Create `smollama/plugins/` with a plugin loader that scans for `SensorPlugin` subclasses.
