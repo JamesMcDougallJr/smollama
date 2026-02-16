@@ -70,6 +70,15 @@ success() {
 }
 
 #
+# Help text
+#
+
+show_help() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
+  exit 0
+}
+
+#
 # Cleanup handler
 #
 
@@ -326,6 +335,13 @@ verify_services() {
 #
 
 main() {
+  # Check for help flag before doing anything else
+  for arg in "$@"; do
+    if [[ "$arg" == "--help" ]] || [[ "$arg" == "-h" ]]; then
+      show_help
+    fi
+  done
+
   echo -e "${COLOR_BLUE}╔═══════════════════════════════════════════════════════╗${COLOR_RESET}"
   echo -e "${COLOR_BLUE}║         Smollama Service Startup                     ║${COLOR_RESET}"
   echo -e "${COLOR_BLUE}╚═══════════════════════════════════════════════════════╝${COLOR_RESET}"
