@@ -22,6 +22,48 @@ Designed for distributed home automation, environmental monitoring, and edge AI 
 
 ## Installation
 
+First, install UV (recommended) or ensure you have pip available:
+
+```bash
+# Install UV (recommended - 10-100x faster than pip)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# OR install UV via pip
+pip install uv
+```
+
+### Install with UV (Recommended)
+
+UV provides faster dependency installation and reproducible builds via lockfile.
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd smollama
+
+# Basic install
+uv sync
+
+# Development (includes testing tools)
+uv sync --extra dev
+
+# With memory/vector search
+uv sync --extra memory
+
+# With web dashboard
+uv sync --extra dashboard
+
+# With Raspberry Pi GPIO support (Raspberry Pi only)
+uv sync --extra pi
+
+# Full install (all features)
+uv sync --all-extras
+```
+
+### Install with pip (Alternative)
+
+Traditional pip installation is also supported:
+
 ```bash
 # Clone the repository
 git clone <repo-url>
@@ -30,8 +72,8 @@ cd smollama
 # Basic install
 pip install -e .
 
-# With Raspberry Pi GPIO support
-pip install -e ".[pi]"
+# Development (includes testing tools)
+pip install -e ".[dev]"
 
 # With memory/vector search
 pip install -e ".[memory]"
@@ -39,11 +81,11 @@ pip install -e ".[memory]"
 # With web dashboard
 pip install -e ".[dashboard]"
 
+# With Raspberry Pi GPIO support
+pip install -e ".[pi]"
+
 # Full install (all features)
 pip install -e ".[all]"
-
-# Development (includes testing tools)
-pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -257,6 +299,24 @@ Smollama uses a CRDT (Conflict-free Replicated Data Type) approach for distribut
 
 ## Testing
 
+With UV (recommended):
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run with coverage
+uv run pytest tests/ --cov=smollama --cov-report=term-missing
+
+# Run specific test file
+uv run pytest tests/test_local_store.py -v
+
+# Run tests matching pattern
+uv run pytest tests/ -k "memory" -v
+```
+
+Alternatively with pytest directly:
+
 ```bash
 # Run all tests
 pytest tests/ -v
@@ -272,6 +332,75 @@ pytest tests/ -k "memory" -v
 ```
 
 Current coverage: ~70% across 183 tests.
+
+## Troubleshooting
+
+### UV Installation Issues
+
+If UV is not installed:
+
+```bash
+# Install via curl (recommended)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# OR install via pip
+pip install uv
+
+# Verify installation
+uv --version
+```
+
+### Python Version Issues
+
+UV requires Python 3.10+. To install a specific Python version:
+
+```bash
+# Install Python 3.10
+uv python install 3.10
+
+# Verify Python version
+uv run python --version
+```
+
+### Raspberry Pi GPIO Dependencies
+
+On non-Pi systems (macOS, Linux x86), GPIO dependencies may fail to install. This is expected behavior:
+
+- **During development**: Use `uv sync --extra dev` (excludes pi extras)
+- **On Raspberry Pi**: Use `uv sync --extra pi` to install GPIO support
+- **Mock GPIO**: Set `gpio.mock: true` in config.yaml for development
+
+### Lockfile Out of Sync
+
+If you see "lockfile out of sync" warnings:
+
+```bash
+# Regenerate lockfile
+uv lock
+
+# Sync dependencies
+uv sync
+```
+
+### Force Reinstall
+
+To completely reset your environment:
+
+```bash
+# Remove virtual environment and lockfile
+rm -rf .venv uv.lock
+
+# Reinstall from scratch
+uv sync --extra dev
+```
+
+### Dependency Conflicts
+
+If UV reports dependency conflicts:
+
+1. Check that `pyproject.toml` has correct version constraints
+2. Try updating dependencies: `uv lock --upgrade`
+3. Report issues with specific dependency versions to project maintainers
 
 ## Development
 
@@ -301,6 +430,46 @@ mosquitto
 
 # Terminal 3: Run smollama
 smollama -v run
+```
+
+### Developer Workflow
+
+#### With UV (Recommended)
+
+```bash
+# Sync dependencies after pulling changes
+uv sync --extra dev
+
+# Add a new dependency
+uv add <package-name>
+
+# Add a development dependency
+uv add --dev <package-name>
+
+# Update all dependencies
+uv lock --upgrade
+uv sync
+
+# Run tests
+uv run pytest tests/ -v
+
+# Run smollama commands
+uv run smollama status
+uv run smollama run
+```
+
+#### With pip (Alternative)
+
+```bash
+# Install/update dependencies
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/ -v
+
+# Run smollama commands
+smollama status
+smollama run
 ```
 
 ### Project Structure
