@@ -6,6 +6,8 @@ import json
 import logging
 import subprocess
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 from .config import load_config
@@ -14,8 +16,41 @@ from .ollama_client import OllamaClient
 from .mqtt_client import MQTTClient
 
 
-def setup_logging(verbose: bool = False, log_level: str | None = None) -> None:
-    """Configure logging."""
+class JSONFormatter(logging.Formatter):
+    """JSON formatter for structured logging."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format log record as JSON."""
+        log_data = {
+            "timestamp": datetime.fromtimestamp(record.created).isoformat(),
+            "level": record.levelname,
+            "component": record.name,
+            "message": record.getMessage(),
+        }
+
+        # Add exception info if present
+        if record.exc_info:
+            log_data["exception"] = "".join(traceback.format_exception(*record.exc_info))
+
+        # Safe JSON serialization
+        try:
+            return json.dumps(log_data)
+        except (TypeError, ValueError):
+            # Fallback for non-serializable objects
+            log_data["message"] = str(log_data["message"])
+            if "exception" in log_data:
+                log_data["exception"] = str(log_data["exception"])
+            return json.dumps(log_data)
+
+
+def setup_logging(verbose: bool = False, log_level: str | None = None, json_output: bool = False) -> None:
+    """Configure logging.
+
+    Args:
+        verbose: Enable debug logging (ignored if log_level is set).
+        log_level: Explicit log level (warning, info, debug).
+        json_output: Output logs as JSON lines for machine parsing.
+    """
     if log_level:
         level_map = {
             "warning": logging.WARNING,
@@ -26,10 +61,20 @@ def setup_logging(verbose: bool = False, log_level: str | None = None) -> None:
     else:
         level = logging.DEBUG if verbose else logging.INFO
 
+    # Configure handler with appropriate formatter
+    handler = logging.StreamHandler()
+    if json_output:
+        handler.setFormatter(JSONFormatter())
+    else:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        handler.setFormatter(formatter)
+
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[handler],
     )
 
 
@@ -451,6 +496,205 @@ def cmd_mem0_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plugin_install(args: argparse.Namespace) -> int:
+    """Install a plugin from a remote source."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    source = args.source
+    install_dir = Path.home() / ".smollama" / "plugins"
+    install_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Installing plugin from: {source}")
+
+    try:
+        if source.startswith(("http://", "https://", "git@")):
+            # Git URL - clone to temp dir then copy
+            with tempfile.TemporaryDirectory() as tmpdir:
+                print(f"Cloning repository...")
+                result = subprocess.run(
+                    ["git", "clone", source, tmpdir],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    print(f"Error cloning repository: {result.stderr}")
+                    return 1
+
+                # Find plugin files (*.py except __pycache__)
+                tmppath = Path(tmpdir)
+                plugin_files = list(tmppath.glob("*.py"))
+                if not plugin_files:
+                    print("Error: No Python files found in repository")
+                    return 1
+
+                # Determine plugin name from first file or repo name
+                plugin_name = source.split("/")[-1].replace(".git", "")
+                plugin_dir = install_dir / plugin_name
+                plugin_dir.mkdir(exist_ok=True)
+
+                # Copy all Python files
+                for file in plugin_files:
+                    shutil.copy2(file, plugin_dir)
+                    print(f"  Copied: {file.name}")
+
+                # Copy requirements.txt if exists
+                req_file = tmppath / "requirements.txt"
+                if req_file.exists():
+                    shutil.copy2(req_file, plugin_dir / "requirements.txt")
+                    print("  Copied: requirements.txt")
+
+                print(f"\n✓ Plugin installed to: {plugin_dir}")
+
+        else:
+            # Local path - copy files
+            source_path = Path(source).expanduser().resolve()
+            if not source_path.exists():
+                print(f"Error: Path does not exist: {source_path}")
+                return 1
+
+            plugin_name = source_path.name
+            plugin_dir = install_dir / plugin_name
+
+            if source_path.is_file():
+                # Single file - create dir and copy
+                plugin_dir.mkdir(exist_ok=True)
+                shutil.copy2(source_path, plugin_dir)
+                print(f"  Copied: {source_path.name}")
+            else:
+                # Directory - copy entire dir
+                if plugin_dir.exists():
+                    shutil.rmtree(plugin_dir)
+                shutil.copytree(source_path, plugin_dir)
+                print(f"  Copied directory: {source_path}")
+
+            print(f"\n✓ Plugin installed to: {plugin_dir}")
+
+        # Try to validate the plugin
+        print("\nValidating plugin...")
+        try:
+            from smollama.plugins.loader import PluginLoader
+
+            loader = PluginLoader(additional_paths=[str(install_dir)])
+            loader.discover_plugins()
+
+            # Find our newly installed plugin
+            found = False
+            for discovered in loader._discovered_plugins:
+                if plugin_name in str(discovered.source_path):
+                    print(f"✓ Plugin '{discovered.metadata.name}' v{discovered.metadata.version} validated")
+                    print(f"  Type: {discovered.metadata.plugin_type}")
+                    print(f"  Description: {discovered.metadata.description}")
+                    if discovered.metadata.dependencies:
+                        print(f"  Dependencies: {', '.join(discovered.metadata.dependencies)}")
+                    found = True
+                    break
+
+            if not found:
+                print("⚠ Warning: Plugin installed but could not be validated")
+
+        except Exception as e:
+            print(f"⚠ Warning: Plugin validation failed: {e}")
+
+        print("\nTo use this plugin, add it to your config.yaml:")
+        print(f"  plugins:")
+        print(f"    paths:")
+        print(f"      - ~/.smollama/plugins")
+        print(f"    custom:")
+        print(f"      - name: {plugin_name}")
+        print(f"        enabled: true")
+        print(f"        config: {{}}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error installing plugin: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_plugin_list(args: argparse.Namespace) -> int:
+    """List all discovered plugins and their status."""
+    from smollama.plugins.loader import PluginLoader
+    from smollama.config import load_config
+
+    try:
+        # Load config to get plugin paths
+        config = load_config(args.config)
+
+        # Create loader with configured paths
+        additional_paths = config.plugins.paths + [
+            str(Path.home() / ".smollama" / "plugins")
+        ]
+        loader = PluginLoader(additional_paths=additional_paths)
+
+        # Discover plugins
+        print("Discovering plugins...")
+        discovered = loader.discover_plugins()
+
+        if not discovered:
+            print("\nNo plugins found.")
+            print("\nTo install plugins:")
+            print("  smollama plugin install <git-url>")
+            print("  smollama plugin install <local-path>")
+            return 0
+
+        # Load plugins to check status
+        print(f"\nFound {len(discovered)} plugin(s):\n")
+
+        # Load all plugins
+        loader.load_all_plugins()
+
+        # Display each plugin
+        for plugin_info in discovered:
+            name = plugin_info.metadata.name
+            version = plugin_info.metadata.version
+            ptype = plugin_info.metadata.plugin_type
+            desc = plugin_info.metadata.description
+
+            # Check status
+            if name in loader._loaded_plugins:
+                status = "\033[92m✓ LOADED\033[0m"  # Green
+            elif name in loader._skipped_plugins:
+                reason = loader._skipped_plugins[name]
+                status = f"\033[93m⊘ SKIPPED\033[0m ({reason})"  # Yellow
+            elif name in loader._failed_plugins:
+                error = loader._failed_plugins[name]
+                status = f"\033[91m✗ FAILED\033[0m ({error})"  # Red
+            else:
+                status = "? UNKNOWN"
+
+            print(f"  {status}  {name} v{version}")
+            print(f"           Type: {ptype}")
+            print(f"           {desc}")
+
+            if plugin_info.metadata.dependencies:
+                deps = ", ".join(plugin_info.metadata.dependencies)
+                print(f"           Dependencies: {deps}")
+
+            print(f"           Source: {plugin_info.source_path}")
+            print()
+
+        # Print summary
+        print("Summary:")
+        print(f"  Total:   {loader.discovered_count}")
+        print(f"  \033[92mLoaded:  {loader.loaded_count}\033[0m")
+        if loader.skipped_count > 0:
+            print(f"  \033[93mSkipped: {loader.skipped_count}\033[0m")
+        if loader.failed_count > 0:
+            print(f"  \033[91mFailed:  {loader.failed_count}\033[0m")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error listing plugins: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -474,6 +718,11 @@ def main() -> int:
         choices=["warning", "info", "debug"],
         default=None,
         help="Set log level explicitly (overrides -v/--verbose)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output logs as JSON for machine parsing",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
@@ -538,9 +787,25 @@ def main() -> int:
     )
     mem0_logs.set_defaults(func=cmd_mem0_logs)
 
+    # Plugin commands
+    plugin_parser = subparsers.add_parser("plugin", help="Manage plugins")
+    plugin_subparsers = plugin_parser.add_subparsers(dest="plugin_command", help="Plugin commands")
+
+    # plugin install
+    plugin_install = plugin_subparsers.add_parser("install", help="Install a plugin")
+    plugin_install.add_argument(
+        "source",
+        help="Plugin source (git URL or local path)",
+    )
+    plugin_install.set_defaults(func=cmd_plugin_install)
+
+    # plugin list
+    plugin_list = plugin_subparsers.add_parser("list", help="List all plugins")
+    plugin_list.set_defaults(func=cmd_plugin_list)
+
     args = parser.parse_args()
 
-    setup_logging(args.verbose, args.log_level)
+    setup_logging(args.verbose, args.log_level, getattr(args, 'json', False))
 
     if not args.command:
         parser.print_help()
@@ -550,6 +815,12 @@ def main() -> int:
     if args.command == "mem0":
         if not args.mem0_command:
             mem0_parser.print_help()
+            return 1
+
+    # Handle plugin subcommand requiring its own subcommand
+    if args.command == "plugin":
+        if not args.plugin_command:
+            plugin_parser.print_help()
             return 1
 
     # Check if function is async

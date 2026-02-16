@@ -3,7 +3,10 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from smollama.plugins.loader import PluginLoader
 
 
 @dataclass
@@ -75,8 +78,19 @@ class ReadingProvider(ABC):
 class ReadingManager:
     """Manages multiple ReadingProviders for unified access."""
 
-    def __init__(self):
+    def __init__(self, plugin_loader: "PluginLoader | None" = None):
+        """Initialize the reading manager.
+
+        Args:
+            plugin_loader: Optional PluginLoader to automatically register
+                         sensor plugins. If provided, sensor plugins will be
+                         loaded and registered automatically.
+        """
         self._providers: dict[str, ReadingProvider] = {}
+        self._plugin_loader = plugin_loader
+
+        if plugin_loader is not None:
+            self._register_plugins_from_loader()
 
     def register(self, provider: ReadingProvider) -> None:
         """Register a reading provider.
@@ -146,3 +160,35 @@ class ReadingManager:
     def source_types(self) -> list[str]:
         """Get list of registered source types."""
         return list(self._providers.keys())
+
+    def _register_plugins_from_loader(self) -> None:
+        """Register all loaded sensor plugins as reading providers.
+
+        Called automatically during initialization if a plugin_loader is provided.
+        """
+        if self._plugin_loader is None:
+            return
+
+        # Get all loaded sensor plugins
+        sensor_plugins = self._plugin_loader.get_sensor_plugins()
+
+        for plugin in sensor_plugins:
+            self.register(plugin)
+
+    def reload_plugins(self) -> None:
+        """Reload plugins from the plugin loader.
+
+        Useful if plugins were loaded/unloaded after ReadingManager was created.
+        Only works if a plugin_loader was provided during initialization.
+        """
+        if self._plugin_loader is None:
+            raise RuntimeError(
+                "Cannot reload plugins: ReadingManager was not initialized with a plugin_loader"
+            )
+
+        # Clear existing providers loaded from plugins
+        # (keep manually registered ones? For now, clear all)
+        self._providers.clear()
+
+        # Re-register plugins
+        self._register_plugins_from_loader()

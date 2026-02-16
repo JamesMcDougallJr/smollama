@@ -18,8 +18,41 @@ mqtt:
       - "smollama/pi-living-room/#"
     publish_prefix: "smollama/pi-living-room"
 
+# Plugin system configuration
+plugins:
+  # Additional directories to scan for plugins
+  paths: []  # e.g., ["./my_plugins", "~/.smollama/plugins"]
+
+  # Builtin plugins (GPIO, System)
+  builtin:
+    gpio:
+      enabled: true
+      config:
+        mock: false  # Set to true for development without Pi hardware
+        pins:
+          - pin: 17
+            name: "motion_sensor"
+            mode: "input"
+          - pin: 27
+            name: "door_switch"
+            mode: "input"
+    system:
+      enabled: true
+      config: {}  # System plugin has no configuration
+
+  # Custom plugins (installed via `smollama plugin install`)
+  custom: []
+    # Example custom plugin:
+    # - name: bme280
+    #   enabled: true
+    #   config:
+    #     bus: 1
+    #     address: 0x76
+
+# Legacy GPIO config (deprecated - use plugins.builtin.gpio instead)
+# Kept for backward compatibility
 gpio:
-  mock: false  # Set to true for development without Pi hardware
+  mock: false
   pins:
     - pin: 17
       name: "motion_sensor"
@@ -40,6 +73,14 @@ agent:
     - Use get_recent_messages to see message history
 
     Be concise in your responses since you're running on limited hardware.
+
+  # Maximum number of tool call iterations before stopping
+  max_tool_iterations: 10
+
+  # Ollama retry configuration for graceful degradation
+  ollama_retry_attempts: 3  # Number of retry attempts on Ollama failure
+  ollama_retry_backoff_seconds: 2.0  # Initial backoff delay (exponential)
+  ollama_fallback_mode: "skip"  # "skip" = continue without LLM, "queue" = queue for later
 
 # Memory system configuration
 memory:

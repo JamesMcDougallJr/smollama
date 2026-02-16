@@ -58,6 +58,10 @@ class AgentConfig:
         "You are a home automation assistant running on a Raspberry Pi. "
         "You can read GPIO sensors and communicate with other nodes via MQTT."
     )
+    max_tool_iterations: int = 10
+    ollama_retry_attempts: int = 3
+    ollama_retry_backoff_seconds: float = 2.0
+    ollama_fallback_mode: str = "skip"  # "skip" or "queue"
 
 
 @dataclass
@@ -103,6 +107,37 @@ class Mem0Config:
 
 
 @dataclass
+class BuiltinPluginConfig:
+    """Configuration for a builtin plugin (GPIO, System)."""
+
+    enabled: bool = True
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class CustomPluginConfig:
+    """Configuration for a custom plugin."""
+
+    name: str
+    enabled: bool = True
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class PluginsConfig:
+    """Configuration for the plugin system."""
+
+    paths: list[str] = field(default_factory=list)
+    """Additional directories to scan for plugins"""
+
+    builtin: dict[str, BuiltinPluginConfig] = field(default_factory=dict)
+    """Builtin plugin configurations (gpio, system)"""
+
+    custom: list[CustomPluginConfig] = field(default_factory=list)
+    """Custom plugin configurations"""
+
+
+@dataclass
 class Config:
     node: NodeConfig = field(default_factory=NodeConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
@@ -112,6 +147,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     mem0: Mem0Config = field(default_factory=Mem0Config)
+    plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
 
 def _get_env(key: str, default: Any = None) -> Any:
@@ -261,10 +297,23 @@ def load_config(config_path: str | Path | None = None) -> Config:
 
             # Parse agent config
             if "agent" in data:
+                agent_data = data["agent"]
                 config.agent = AgentConfig(
-                    system_prompt=data["agent"].get(
+                    system_prompt=agent_data.get(
                         "system_prompt", config.agent.system_prompt
-                    )
+                    ),
+                    max_tool_iterations=agent_data.get(
+                        "max_tool_iterations", config.agent.max_tool_iterations
+                    ),
+                    ollama_retry_attempts=agent_data.get(
+                        "ollama_retry_attempts", config.agent.ollama_retry_attempts
+                    ),
+                    ollama_retry_backoff_seconds=agent_data.get(
+                        "ollama_retry_backoff_seconds", config.agent.ollama_retry_backoff_seconds
+                    ),
+                    ollama_fallback_mode=agent_data.get(
+                        "ollama_fallback_mode", config.agent.ollama_fallback_mode
+                    ),
                 )
 
             # Parse memory config
@@ -334,6 +383,51 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     compose_file=mem0_data.get(
                         "compose_file", config.mem0.compose_file
                     ),
+                )
+
+            # Parse plugins config
+            if "plugins" in data:
+                plugins_data = data["plugins"]
+                builtin_plugins = {}
+                custom_plugins = []
+
+                # Parse builtin plugins
+                if "builtin" in plugins_data:
+                    for plugin_name, plugin_data in plugins_data["builtin"].items():
+                        builtin_plugins[plugin_name] = BuiltinPluginConfig(
+                            enabled=plugin_data.get("enabled", True),
+                            config=plugin_data.get("config", {}),
+                        )
+
+                # Parse custom plugins
+                if "custom" in plugins_data:
+                    for plugin_data in plugins_data["custom"]:
+                        custom_plugins.append(
+                            CustomPluginConfig(
+                                name=plugin_data["name"],
+                                enabled=plugin_data.get("enabled", True),
+                                config=plugin_data.get("config", {}),
+                            )
+                        )
+
+                config.plugins = PluginsConfig(
+                    paths=plugins_data.get("paths", []),
+                    builtin=builtin_plugins,
+                    custom=custom_plugins,
+                )
+            else:
+                # Backward compatibility: if no plugins config, auto-enable builtins
+                # with config from legacy gpio section
+                config.plugins = PluginsConfig(
+                    paths=[],
+                    builtin={
+                        "gpio": BuiltinPluginConfig(
+                            enabled=True,
+                            config={"mock": config.gpio.mock, "pins": []},
+                        ),
+                        "system": BuiltinPluginConfig(enabled=True, config={}),
+                    },
+                    custom=[],
                 )
 
     # Apply environment variable overrides
