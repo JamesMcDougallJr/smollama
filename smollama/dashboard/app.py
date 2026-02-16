@@ -210,6 +210,43 @@ def create_app(
 
         return stats
 
+    @app.get("/api/health")
+    async def api_health() -> dict[str, Any]:
+        """Health check endpoint for monitoring and load balancers.
+
+        Returns basic health status of dashboard components.
+        Always returns 200 OK even if components are unavailable.
+        """
+        health = {
+            "status": "ok",
+            "timestamp": datetime.now().isoformat(),
+            "node_name": config.node.name,
+            "components": {
+                "store": store is not None,
+                "readings": readings is not None,
+                "gpio": gpio_reader is not None,
+            },
+        }
+
+        # Add readings health if available
+        if readings:
+            try:
+                current = await readings.read_all()
+                health["components"]["readings_count"] = len(current)
+            except Exception as e:
+                health["components"]["readings_error"] = str(e)
+
+        # Add store health if available
+        if store:
+            try:
+                stats = store.get_stats()
+                health["components"]["store_observations"] = stats.get("observation_count", 0)
+                health["components"]["store_memories"] = stats.get("memory_count", 0)
+            except Exception as e:
+                health["components"]["store_error"] = str(e)
+
+        return health
+
     # ==================== HTMX Partials ====================
 
     @app.get("/htmx/readings", response_class=HTMLResponse)

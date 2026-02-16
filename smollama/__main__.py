@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import json
 import logging
 import subprocess
 import sys
@@ -13,9 +14,18 @@ from .ollama_client import OllamaClient
 from .mqtt_client import MQTTClient
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, log_level: str | None = None) -> None:
     """Configure logging."""
-    level = logging.DEBUG if verbose else logging.INFO
+    if log_level:
+        level_map = {
+            "warning": logging.WARNING,
+            "info": logging.INFO,
+            "debug": logging.DEBUG,
+        }
+        level = level_map.get(log_level, logging.INFO)
+    else:
+        level = logging.DEBUG if verbose else logging.INFO
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -93,7 +103,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
 
     print(f"Starting Smollama Dashboard")
     print(f"Node: {config.node.name}")
-    print(f"URL: http://0.0.0.0:{args.port}")
+    print(f"URL: http://{args.host}:{args.port}")
 
     app = create_app(config, store=store, readings=readings, gpio_reader=gpio)
 
@@ -101,7 +111,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         verbose = getattr(args, "verbose", False)
         config_uvicorn = uvicorn.Config(
             app,
-            host="0.0.0.0",
+            host=args.host,
             port=args.port,
             log_level="info" if verbose else "warning",
         )
@@ -117,51 +127,163 @@ async def cmd_status(args: argparse.Namespace) -> int:
     """Check connectivity status."""
     config = load_config(args.config)
 
-    print(f"Smollama Status Check")
-    print(f"=====================")
-    print(f"Node: {config.node.name}")
-    print()
+    # Build status data structure
+    from datetime import datetime
+    status_data = {
+        "timestamp": datetime.now().isoformat(),
+        "node": {
+            "name": config.node.name,
+        },
+    }
 
     # Check Ollama
-    print(f"Ollama ({config.ollama.base_url}):")
     ollama = OllamaClient(config.ollama)
-    if await ollama.check_connection():
+    ollama_connected = await ollama.check_connection()
+
+    ollama_status = {
+        "base_url": config.ollama.base_url,
+        "connected": ollama_connected,
+        "configured_model": config.ollama.model,
+    }
+
+    if ollama_connected:
         models = await ollama.list_models()
-        print(f"  Status: Connected")
-        print(f"  Configured model: {config.ollama.model}")
-        print(f"  Available models: {', '.join(models) if models else 'none'}")
+        ollama_status["available_models"] = models if models else []
 
         # Check if configured model is available
         base_model = config.ollama.model.split(":")[0]
-        if any(base_model in m for m in models):
-            print(f"  Model available: Yes")
-        else:
-            print(f"  Model available: No (run 'ollama pull {config.ollama.model}')")
+        ollama_status["model_available"] = any(base_model in m for m in models)
     else:
-        print(f"  Status: Not connected")
-        print(f"  Make sure Ollama is running")
+        ollama_status["available_models"] = []
+        ollama_status["model_available"] = False
 
-    print()
+    status_data["ollama"] = ollama_status
 
     # Check MQTT
-    print(f"MQTT ({config.mqtt.broker}:{config.mqtt.port}):")
     mqtt = MQTTClient(config.mqtt)
-    if await mqtt.check_connection():
-        print(f"  Status: Reachable")
-        print(f"  Subscribe topics: {', '.join(config.mqtt.topics.subscribe)}")
-        print(f"  Publish prefix: {config.mqtt.topics.publish_prefix}")
-    else:
-        print(f"  Status: Not reachable")
-        print(f"  Make sure the MQTT broker is running")
+    mqtt_reachable = await mqtt.check_connection()
 
-    print()
+    mqtt_status = {
+        "broker": config.mqtt.broker,
+        "port": config.mqtt.port,
+        "reachable": mqtt_reachable,
+        "subscribe_topics": config.mqtt.topics.subscribe,
+        "publish_prefix": config.mqtt.topics.publish_prefix,
+    }
+
+    status_data["mqtt"] = mqtt_status
 
     # GPIO info
-    print(f"GPIO:")
-    print(f"  Mode: {'Mock' if config.gpio.mock else 'Real'}")
-    print(f"  Configured pins: {len(config.gpio.pins)}")
-    for pin in config.gpio.pins:
-        print(f"    - {pin.name} (pin {pin.pin}, {pin.mode})")
+    gpio_status = {
+        "mode": "mock" if config.gpio.mock else "real",
+        "configured_pins": len(config.gpio.pins),
+        "pins": [
+            {
+                "name": pin.name,
+                "pin": pin.pin,
+                "mode": pin.mode,
+            }
+            for pin in config.gpio.pins
+        ],
+    }
+
+    status_data["gpio"] = gpio_status
+
+    # Reading sources (optional, requires dashboard deps)
+    readings_status = {
+        "available": False,
+        "source_types": [],
+        "source_count": 0,
+        "sources": [],
+    }
+
+    try:
+        from .readings import ReadingManager, SystemReadingProvider
+
+        readings = ReadingManager()
+        readings.register(SystemReadingProvider())
+
+        # Optionally add GPIO if configured
+        if config.gpio.pins:
+            try:
+                from .gpio_reader import GPIOReader
+                from .readings import GPIOReadingProvider
+
+                gpio = GPIOReader(config.gpio)
+                readings.register(GPIOReadingProvider(gpio))
+            except ImportError:
+                pass
+
+        readings_status["available"] = True
+        readings_status["source_types"] = readings.source_types
+        readings_status["source_count"] = len(readings.list_sources())
+        readings_status["sources"] = readings.list_sources()
+
+    except ImportError:
+        pass
+
+    status_data["readings"] = readings_status
+
+    # Output based on format
+    if args.json:
+        print(json.dumps(status_data, indent=2))
+    else:
+        # Human-readable format (preserve original output)
+        print(f"Smollama Status Check")
+        print(f"=====================")
+        print(f"Node: {status_data['node']['name']}")
+        print()
+
+        # Ollama section
+        print(f"Ollama ({ollama_status['base_url']}):")
+        if ollama_status['connected']:
+            print(f"  Status: Connected")
+            print(f"  Configured model: {ollama_status['configured_model']}")
+            models_str = ', '.join(ollama_status['available_models']) if ollama_status['available_models'] else 'none'
+            print(f"  Available models: {models_str}")
+            if ollama_status['model_available']:
+                print(f"  Model available: Yes")
+            else:
+                print(f"  Model available: No (run 'ollama pull {ollama_status['configured_model']}')")
+        else:
+            print(f"  Status: Not connected")
+            print(f"  Make sure Ollama is running")
+
+        print()
+
+        # MQTT section
+        print(f"MQTT ({mqtt_status['broker']}:{mqtt_status['port']}):")
+        if mqtt_status['reachable']:
+            print(f"  Status: Reachable")
+            print(f"  Subscribe topics: {', '.join(mqtt_status['subscribe_topics'])}")
+            print(f"  Publish prefix: {mqtt_status['publish_prefix']}")
+        else:
+            print(f"  Status: Not reachable")
+            print(f"  Make sure the MQTT broker is running")
+
+        print()
+
+        # GPIO section
+        print(f"GPIO:")
+        print(f"  Mode: {'Mock' if gpio_status['mode'] == 'mock' else 'Real'}")
+        print(f"  Configured pins: {gpio_status['configured_pins']}")
+        for pin in gpio_status['pins']:
+            print(f"    - {pin['name']} (pin {pin['pin']}, {pin['mode']})")
+
+        print()
+
+        # Reading sources section
+        print(f"Reading Sources:")
+        if readings_status["available"]:
+            print(f"  Status: Available")
+            print(f"  Source types: {', '.join(readings_status['source_types'])}")
+            print(f"  Total sources: {readings_status['source_count']}")
+            if readings_status["sources"]:
+                print(f"  Sources:")
+                for source in readings_status["sources"]:
+                    print(f"    - {source}")
+        else:
+            print(f"  Status: Not available (install dashboard dependencies)")
 
     return 0
 
@@ -346,6 +468,13 @@ def main() -> int:
         action="store_true",
         help="Enable verbose logging",
     )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        choices=["warning", "info", "debug"],
+        default=None,
+        help="Set log level explicitly (overrides -v/--verbose)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -355,6 +484,11 @@ def main() -> int:
 
     # Status command
     status_parser = subparsers.add_parser("status", help="Check connectivity status")
+    status_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output status as JSON",
+    )
     status_parser.set_defaults(func=cmd_status)
 
     # Dashboard command
@@ -364,6 +498,12 @@ def main() -> int:
         type=int,
         default=8080,
         help="Port to run dashboard on (default: 8080)",
+    )
+    dashboard_parser.add_argument(
+        "--host",
+        type=str,
+        default="0.0.0.0",
+        help="Host to bind dashboard to (default: 0.0.0.0)",
     )
     dashboard_parser.set_defaults(func=cmd_dashboard)
 
@@ -400,7 +540,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, args.log_level)
 
     if not args.command:
         parser.print_help()
