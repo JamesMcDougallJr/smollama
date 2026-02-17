@@ -269,8 +269,8 @@ class DiscoveryManager:
 
         logger.info("Discovery manager stopped")
 
-    def get_discovered_nodes(self) -> list[dict[str, Any]]:
-        """Get list of discovered nodes synchronously.
+    async def get_discovered_nodes(self) -> list[dict[str, Any]]:
+        """Get list of discovered nodes.
 
         Returns:
             List of discovered node info dictionaries.
@@ -278,9 +278,7 @@ class DiscoveryManager:
         if not self._browser:
             return []
 
-        # Run the async method in a synchronous context
-        loop = asyncio.get_event_loop()
-        return loop.run_until_complete(self._browser.get_discovered_nodes())
+        return await self._browser.get_discovered_nodes()
 
     async def wait_for_discovery(self, timeout: int = 10) -> None:
         """Wait for at least one node to be discovered.

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -136,7 +136,7 @@ def create_app(
     async def api_readings() -> dict[str, Any]:
         """Get current readings as JSON."""
         if not readings:
-            return {"error": "No reading manager available", "readings": []}
+            return JSONResponse({"error": "No reading manager available", "readings": []}, status_code=503)
 
         try:
             current = await readings.read_all()
@@ -154,7 +154,7 @@ def create_app(
                 ],
             }
         except Exception as e:
-            return {"error": str(e), "readings": []}
+            return JSONResponse({"error": str(e), "readings": []}, status_code=503)
 
     @app.get("/api/observations")
     async def api_observations(
@@ -164,7 +164,7 @@ def create_app(
     ) -> dict[str, Any]:
         """Search observations."""
         if not store:
-            return {"error": "No memory store available", "observations": []}
+            return JSONResponse({"error": "No memory store available", "observations": []}, status_code=503)
 
         observations = store.search_observations(
             query=query,
@@ -185,7 +185,7 @@ def create_app(
     ) -> dict[str, Any]:
         """Search memories."""
         if not store:
-            return {"error": "No memory store available", "memories": []}
+            return JSONResponse({"error": "No memory store available", "memories": []}, status_code=503)
 
         memories = store.search_memories(query=query, limit=limit)
 
@@ -285,6 +285,15 @@ def create_app(
         return templates.TemplateResponse(
             "partials/observations_list.html",
             {"request": request, "observations": observations},
+        )
+
+    @app.get("/htmx/memories", response_class=HTMLResponse)
+    async def htmx_memories(request: Request, query: str = ""):
+        """HTMX partial for memories list."""
+        memories = store.search_memories(query, limit=20) if store else []
+        return templates.TemplateResponse(
+            "partials/memories_list.html",
+            {"request": request, "memories": memories},
         )
 
     @app.get("/htmx/gpio-toggle", response_class=HTMLResponse)

@@ -175,6 +175,10 @@ class OllamaEmbeddings(EmbeddingProvider):
 
             # Update dimension based on actual response
             if len(embeddings) != self._dimension:
+                logger.warning(
+                    f"Embedding dimension mismatch: expected {self._dimension}, got {len(embeddings)}. "
+                    f"Updating dimension (possible model swap)."
+                )
                 self._dimension = len(embeddings)
 
             return self.floats_to_bytes(embeddings)
@@ -208,6 +212,10 @@ class OllamaEmbeddings(EmbeddingProvider):
                     results.append(self.floats_to_bytes([0.0] * self._dimension))
                 else:
                     if len(embeddings) != self._dimension:
+                        logger.warning(
+                            f"Embedding dimension mismatch: expected {self._dimension}, got {len(embeddings)}. "
+                            f"Updating dimension (possible model swap)."
+                        )
                         self._dimension = len(embeddings)
                     results.append(self.floats_to_bytes(embeddings))
 

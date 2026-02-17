@@ -98,6 +98,8 @@ class Agent:
                 max_retries=config.sync.retry_max_attempts,
             )
 
+        self._sync_loop_task: asyncio.Task | None = None
+
         # Initialize discovery if enabled
         # Note: Discovery requires dashboard to be running (for port announcement)
         # This is just initialized here but not started in agent mode
@@ -230,7 +232,7 @@ class Agent:
             await self._mem0_client.close()
 
         # Stop sync loop
-        if self._sync_client and hasattr(self, '_sync_loop_task'):
+        if self._sync_client and self._sync_loop_task is not None:
             self._stop_event.set()
             await self._sync_loop_task
             logger.info("Sync loop stopped")
@@ -350,6 +352,11 @@ class Agent:
                 elif self.config.agent.ollama_fallback_mode == "queue":
                     # Queue mode not yet implemented
                     logger.warning("Queue mode not implemented, skipping")
+                    return None
+                else:
+                    logger.warning(
+                        f"Unknown fallback mode '{self.config.agent.ollama_fallback_mode}', skipping"
+                    )
                     return None
 
             # Check if we have tool calls

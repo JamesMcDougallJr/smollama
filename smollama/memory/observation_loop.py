@@ -272,6 +272,10 @@ class ObservationLoop:
         except json.JSONDecodeError:
             # Response wasn't valid JSON, try to extract text as single observation
             if response and len(response) > 10:
+                if len(response) > 500:
+                    logger.warning(
+                        f"LLM response truncated from {len(response)} to 500 chars"
+                    )
                 self._store.add_observation(
                     text=response[:500],
                     observation_type="general",
