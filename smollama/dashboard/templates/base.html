@@ -23,6 +23,34 @@
         .htmx-request.htmx-indicator {
             opacity: 1;
         }
+
+        /* Auto-refresh toggle button */
+        .refresh-toggle {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            padding: 12px 20px;
+            border-radius: 8px;
+            background: #1f2937;
+            border: 1px solid #374151;
+            color: #f3f4f6;
+            cursor: pointer;
+            font-size: 14px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s;
+        }
+        .refresh-toggle:hover {
+            background: #374151;
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.4);
+        }
+        .refresh-toggle.paused {
+            background: #7c2d12;
+            border-color: #ea580c;
+        }
+        .refresh-toggle.paused:hover {
+            background: #9a3412;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 min-h-screen">
@@ -63,5 +91,51 @@
             Smollama Dashboard • Running on {{ node_name }}
         </div>
     </footer>
+
+    <!-- Auto-refresh toggle button -->
+    <button id="refresh-toggle" class="refresh-toggle" onclick="toggleAutoRefresh()">
+        <span id="refresh-icon">⏸️</span> <span id="refresh-text">Pause</span>
+    </button>
+
+    <script>
+        // Auto-refresh toggle functionality
+        const STORAGE_KEY = 'smollama_auto_refresh';
+
+        function toggleAutoRefresh() {
+            const currentState = localStorage.getItem(STORAGE_KEY) !== 'paused';
+            const newState = currentState ? 'paused' : 'active';
+            localStorage.setItem(STORAGE_KEY, newState);
+            updateRefreshState();
+        }
+
+        function updateRefreshState() {
+            const isPaused = localStorage.getItem(STORAGE_KEY) === 'paused';
+            const button = document.getElementById('refresh-toggle');
+            const icon = document.getElementById('refresh-icon');
+            const text = document.getElementById('refresh-text');
+
+            if (isPaused) {
+                document.body.classList.add('refresh-paused');
+                button.classList.add('paused');
+                icon.textContent = '▶️';
+                text.textContent = 'Resume';
+            } else {
+                document.body.classList.remove('refresh-paused');
+                button.classList.remove('paused');
+                icon.textContent = '⏸️';
+                text.textContent = 'Pause';
+            }
+        }
+
+        // Initialize state on page load
+        document.addEventListener('DOMContentLoaded', updateRefreshState);
+
+        // Listen for storage changes from other tabs
+        window.addEventListener('storage', function(e) {
+            if (e.key === STORAGE_KEY) {
+                updateRefreshState();
+            }
+        });
+    </script>
 </body>
 </html>

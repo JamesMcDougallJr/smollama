@@ -20,7 +20,8 @@ from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
 from .mem0 import Mem0Client, Mem0Bridge, CrossNodeRecallTool
-from .sync.crdt_log import CRDTLog
+from .sync import CRDTLog, SyncClient
+from .discovery import DiscoveryManager
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,43 @@ class Agent:
                 )
                 self._mem0_bridge = Mem0Bridge(config.mem0, crdt_log)
 
+        # Initialize sync system if enabled
+        self._sync_client: SyncClient | None = None
+        self._stop_event = asyncio.Event()
+        if config.sync.enabled:
+            crdt_log = CRDTLog(
+                db_path=config.sync.crdt_db_path,
+                node_id=config.node.name,
+            )
+            crdt_log.connect()
+            self._sync_client = SyncClient(
+                crdt_log=crdt_log,
+                remote_url=config.sync.llama_url if config.sync.llama_url else None,
+                batch_size=config.sync.batch_size,
+                max_retries=config.sync.retry_max_attempts,
+            )
+
+        # Initialize discovery if enabled
+        # Note: Discovery requires dashboard to be running (for port announcement)
+        # This is just initialized here but not started in agent mode
+        self._discovery_manager: DiscoveryManager | None = None
+        if config.discovery.enabled:
+            # Determine node type for announcement
+            node_type = "llama" if config.mem0.bridge_enabled else "alpaca"
+            # Port: default to 8080 (dashboard port)
+            # Note: Agent-only mode won't have a port to announce
+            port = 8080  # TODO: Make configurable
+
+            self._discovery_manager = DiscoveryManager(
+                node_name=config.node.name,
+                node_type=node_type,
+                port=port,
+                service_type=config.discovery.service_type,
+                announce=config.discovery.announce,
+                browse=config.discovery.browse,
+                cache_ttl_seconds=config.discovery.cache_ttl_seconds,
+            )
+
         # Initialize tool registry with unified reading tools
         self._tools = ToolRegistry()
 
@@ -133,6 +171,41 @@ class Agent:
         if self._mem0_bridge:
             await self._mem0_bridge.start()
 
+        # Start discovery manager if enabled
+        # Note: In agent-only mode, discovery will browse but won't announce
+        # (no HTTP server port to announce)
+        if self._discovery_manager:
+            await self._discovery_manager.start()
+            logger.info("Discovery manager started")
+
+            # If we have sync enabled but no URL, try discovery
+            if self._sync_client and not self._sync_client.remote_url:
+                logger.info("Waiting for Llama node discovery...")
+                await self._discovery_manager.wait_for_discovery(
+                    timeout=self.config.discovery.discovery_timeout_seconds
+                )
+
+                # Look for Llama node
+                nodes = await self._discovery_manager._browser.get_discovered_nodes()
+                llama_nodes = [n for n in nodes if n["node_type"] == "llama"]
+
+                if llama_nodes:
+                    llama_url = llama_nodes[0]["url"]
+                    logger.info(f"Discovered Llama node at {llama_url}")
+                    self._sync_client.set_remote_url(llama_url)
+                else:
+                    logger.warning("No Llama node discovered, sync disabled")
+
+        # Start sync loop if enabled and URL configured
+        if self._sync_client and self._sync_client.remote_url:
+            self._sync_loop_task = asyncio.create_task(
+                self._sync_client.sync_loop(
+                    interval_seconds=self.config.sync.sync_interval_minutes * 60,
+                    stop_event=self._stop_event,
+                )
+            )
+            logger.info("Sync loop started")
+
         self._running = True
         logger.info("Agent started successfully")
 
@@ -155,6 +228,17 @@ class Agent:
         # Close Mem0 client
         if self._mem0_client:
             await self._mem0_client.close()
+
+        # Stop sync loop
+        if self._sync_client and hasattr(self, '_sync_loop_task'):
+            self._stop_event.set()
+            await self._sync_loop_task
+            logger.info("Sync loop stopped")
+
+        # Stop discovery manager
+        if self._discovery_manager:
+            await self._discovery_manager.stop()
+            logger.info("Discovery manager stopped")
 
         # Disconnect from services
         await self._mqtt.disconnect()
@@ -205,17 +289,24 @@ class Agent:
     async def _run_agent_loop(
         self,
         user_message: str,
-        max_iterations: int = 10,
+        max_iterations: int | None = None,
     ) -> str | None:
         """Run the agentic tool loop.
 
         Args:
             user_message: Initial user/trigger message.
-            max_iterations: Maximum tool call iterations.
+            max_iterations: Maximum tool call iterations (uses config default if None).
 
         Returns:
             Final text response from the LLM.
         """
+        # Use config default if not explicitly specified
+        if max_iterations is None:
+            max_iterations = self.config.agent.max_tool_iterations
+
+        # Enforce minimum of 1 iteration
+        max_iterations = max(1, max_iterations)
+
         messages = [
             self._system_message,
             {"role": "user", "content": user_message},
@@ -226,12 +317,40 @@ class Agent:
         for iteration in range(max_iterations):
             logger.debug(f"Agent loop iteration {iteration + 1}")
 
-            # Call LLM
-            try:
-                response = await self._ollama.chat(messages, tools)
-            except Exception as e:
-                logger.error(f"LLM call failed: {e}")
-                return None
+            # Call LLM with retry logic
+            response = None
+            last_error = None
+
+            for attempt in range(self.config.agent.ollama_retry_attempts):
+                try:
+                    response = await self._ollama.chat(messages, tools)
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    last_error = e
+                    if attempt < self.config.agent.ollama_retry_attempts - 1:
+                        # Calculate exponential backoff
+                        backoff = self.config.agent.ollama_retry_backoff_seconds * (2 ** attempt)
+                        logger.warning(
+                            f"LLM call failed (attempt {attempt + 1}/{self.config.agent.ollama_retry_attempts}): {e}. "
+                            f"Retrying in {backoff:.1f}s..."
+                        )
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(
+                            f"LLM call failed after {self.config.agent.ollama_retry_attempts} attempts: {e}"
+                        )
+
+            # If all retries failed, handle based on fallback mode
+            if response is None:
+                logger.warning(
+                    f"Operating in degraded mode. Fallback mode: {self.config.agent.ollama_fallback_mode}"
+                )
+                if self.config.agent.ollama_fallback_mode == "skip":
+                    return None
+                elif self.config.agent.ollama_fallback_mode == "queue":
+                    # Queue mode not yet implemented
+                    logger.warning("Queue mode not implemented, skipping")
+                    return None
 
             # Check if we have tool calls
             if response.has_tool_calls:

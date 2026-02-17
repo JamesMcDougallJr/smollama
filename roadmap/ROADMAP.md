@@ -8,14 +8,18 @@
 | [UV Migration](uv-migration.md) | ✅ Complete | Small | Migrate from pip to UV for faster installs and dependency resolution |
 | [Install Scripts](install-scripts.md) | ✅ Complete | Medium | `install.sh`, `start.sh`, `setup-pi.sh` |
 | [Plugin System](plugin-system.md) | ✅ Complete | Large | `SensorPlugin` / `ToolPlugin` interfaces, plugin loader, discovery |
+| [mDNS Discovery](mdns-discovery.md) | ✅ Complete | Small | Zero-config Pi cluster auto-discovery |
 | [Improvements](improvements.md) | Not started | Medium | Dashboard, memory, agent, config, MQTT enhancements |
-| [Future Directions](future-directions.md) | Not started | Large | Multi-node aggregation, WebSocket, mDNS, graph memory |
+| [WebSocket Dashboard](websocket-dashboard.md) | Not started | Medium | Real-time dashboard updates via WebSocket |
+| [Multi-Node Dashboard](multi-node-dashboard.md) | Not started | Medium | Unified view of all nodes |
+| [Adaptive Scheduling](adaptive-scheduling.md) | Not started | Small-Medium | Smart observation intervals |
+| [Future Directions](future-directions.md) | Not started | Large | Plugin marketplace, Neo4j, other long-term ideas |
 | [OpenClaw Integration](OPENCLAW_INTEGRATION.md) | Not started | Medium-Large | Gateway client, bidirectional tools, memory bridge, messaging |
 
 ## Progress
 
-- 4 / 7 plans started
-- 4 / 7 plans completed
+- 5 / 11 plans started
+- 5 / 11 plans completed (45%)
 
 ## Plan Details
 
@@ -34,8 +38,20 @@ Enhancements grouped by subsystem: dashboard (auto-refresh, search, sparklines),
 ### [Plugin System](plugin-system.md)
 Refactor readings into a formal plugin system with `SensorPlugin` and `ToolPlugin` interfaces, plugin discovery, lifecycle hooks, and per-plugin config validation. Move existing GPIO and System providers into `plugins/builtin/`.
 
+### [WebSocket Dashboard](websocket-dashboard.md)
+Replace HTMX polling with WebSocket push for real-time dashboard updates. Enables instant sensor reading updates, live observation streams, and reduced server load. FastAPI natively supports WebSocket endpoints.
+
+### [mDNS Discovery](mdns-discovery.md)
+Zero-config discovery of Smollama nodes using mDNS/Zeroconf. Nodes announce themselves as `_smollama._tcp` services, enabling automatic cluster formation without manual configuration. Alpaca nodes automatically discover and sync with Llama nodes on the local network. Includes `smollama discovery list` CLI command for debugging.
+
+### [Multi-Node Dashboard](multi-node-dashboard.md)
+Unified dashboard view showing readings, observations, and stats from all nodes in a cluster. The Llama node aggregates data from all Alpaca nodes via parallel API calls with caching. Supports per-node filtering and health monitoring.
+
+### [Adaptive Scheduling](adaptive-scheduling.md)
+Dynamically adjust observation frequency based on sensor volatility. Increases frequency during rapid changes, decreases during stable periods to save resources. Uses coefficient of variation to measure volatility with configurable thresholds and hysteresis.
+
 ### [Future Directions](future-directions.md)
-Longer-term ideas: multi-node dashboard aggregation, plugin marketplace, WebSocket real-time updates, mDNS auto-discovery, adaptive observation scheduling, Neo4j graph memory.
+Long-term research directions and speculative features: plugin marketplace (deferred until plugin ecosystem grows), Neo4j graph memory (research needed), federated learning, edge ML training.
 
 ### [OpenClaw Integration](OPENCLAW_INTEGRATION.md)
 Integration roadmap for connecting smollama (edge intelligence) with OpenClaw (cloud orchestration gateway). Nine integration approaches ranging from quick wins (REST API skill) to deep integration (bidirectional tool bridging, shared memory, session coordination). Recommended implementation order:

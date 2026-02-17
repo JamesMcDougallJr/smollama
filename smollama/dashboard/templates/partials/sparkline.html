@@ -1,0 +1,79 @@
+<!-- Sparkline visualization for 24h sensor history -->
+{% if history and history|length > 1 %}
+<div class="mt-3 pt-3 border-t border-gray-700">
+    <div class="flex items-center justify-between mb-2">
+        <span class="text-xs text-gray-500">24h trend</span>
+        <span class="text-xs text-gray-500">{{ history|length }} samples</span>
+    </div>
+    <canvas id="sparkline-{{ full_id|replace(':', '-')|replace('.', '-') }}"
+            width="280"
+            height="40"
+            class="w-full"></canvas>
+</div>
+
+<script>
+(function() {
+    const canvas = document.getElementById('sparkline-{{ full_id|replace(':', '-')|replace('.', '-') }}');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const history = {{ history|tojson }};
+
+    if (!history || history.length < 2) return;
+
+    // Extract values
+    const values = history.map(h => parseFloat(h.value));
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min || 1;  // Avoid division by zero
+
+    // Canvas dimensions
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = 4;
+    const plotWidth = width - (padding * 2);
+    const plotHeight = height - (padding * 2);
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw line
+    ctx.beginPath();
+    ctx.strokeStyle = '#10b981';  // green-500
+    ctx.lineWidth = 2;
+
+    values.forEach((value, i) => {
+        const x = padding + (i / (values.length - 1)) * plotWidth;
+        const normalizedValue = (value - min) / range;
+        const y = height - padding - (normalizedValue * plotHeight);
+
+        if (i === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+    });
+
+    ctx.stroke();
+
+    // Draw dots at endpoints
+    ctx.fillStyle = '#10b981';
+    const firstX = padding;
+    const firstY = height - padding - ((values[0] - min) / range * plotHeight);
+    const lastX = width - padding;
+    const lastY = height - padding - ((values[values.length - 1] - min) / range * plotHeight);
+
+    ctx.beginPath();
+    ctx.arc(firstX, firstY, 2, 0, 2 * Math.PI);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.arc(lastX, lastY, 2, 0, 2 * Math.PI);
+    ctx.fill();
+})();
+</script>
+{% elif history and history|length == 1 %}
+<div class="mt-3 pt-3 border-t border-gray-700">
+    <span class="text-xs text-gray-500">Insufficient data for trend</span>
+</div>
+{% endif %}

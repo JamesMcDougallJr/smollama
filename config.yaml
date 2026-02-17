@@ -68,3 +68,7 @@ mem0:
   index_memories: true
   bridge_interval_seconds: 30
   compose_file: "deploy/mem0/docker-compose.yml"
+
+discovery:
+  enabled: false
+

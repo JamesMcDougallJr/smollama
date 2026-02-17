@@ -13,7 +13,7 @@
     <!-- Stats Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
          hx-get="/htmx/stats"
-         hx-trigger="every 10s"
+         hx-trigger="load, every 10s [!document.body.classList.contains('refresh-paused')]"
          hx-swap="innerHTML">
         {% if stats %}
         <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">

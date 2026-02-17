@@ -107,6 +107,18 @@ class Mem0Config:
 
 
 @dataclass
+class DiscoveryConfig:
+    """Configuration for mDNS/Zeroconf service discovery."""
+
+    enabled: bool = True
+    service_type: str = "_smollama._tcp"
+    announce: bool = True  # Announce this node
+    browse: bool = True  # Browse for other nodes
+    cache_ttl_seconds: int = 300  # 5 minutes
+    discovery_timeout_seconds: int = 10  # Wait up to 10s on startup
+
+
+@dataclass
 class BuiltinPluginConfig:
     """Configuration for a builtin plugin (GPIO, System)."""
 
@@ -147,6 +159,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     mem0: Mem0Config = field(default_factory=Mem0Config)
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
 
 
@@ -210,6 +223,14 @@ def _apply_env_overrides(config: Config) -> Config:
         config.mem0.server_url = mem0_url
     if mem0_bridge := _get_env("MEM0_BRIDGE_ENABLED"):
         config.mem0.bridge_enabled = mem0_bridge.lower() in ("true", "1", "yes")
+
+    # Discovery overrides
+    if discovery_enabled := _get_env("DISCOVERY_ENABLED"):
+        config.discovery.enabled = discovery_enabled.lower() in ("true", "1", "yes")
+    if discovery_announce := _get_env("DISCOVERY_ANNOUNCE"):
+        config.discovery.announce = discovery_announce.lower() in ("true", "1", "yes")
+    if discovery_browse := _get_env("DISCOVERY_BROWSE"):
+        config.discovery.browse = discovery_browse.lower() in ("true", "1", "yes")
 
     return config
 
@@ -382,6 +403,22 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     ),
                     compose_file=mem0_data.get(
                         "compose_file", config.mem0.compose_file
+                    ),
+                )
+
+            # Parse discovery config
+            if "discovery" in data:
+                disc_data = data["discovery"]
+                config.discovery = DiscoveryConfig(
+                    enabled=disc_data.get("enabled", config.discovery.enabled),
+                    service_type=disc_data.get("service_type", config.discovery.service_type),
+                    announce=disc_data.get("announce", config.discovery.announce),
+                    browse=disc_data.get("browse", config.discovery.browse),
+                    cache_ttl_seconds=disc_data.get(
+                        "cache_ttl_seconds", config.discovery.cache_ttl_seconds
+                    ),
+                    discovery_timeout_seconds=disc_data.get(
+                        "discovery_timeout_seconds", config.discovery.discovery_timeout_seconds
                     ),
                 )
 

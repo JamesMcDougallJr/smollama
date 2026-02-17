@@ -13,15 +13,39 @@
     <!-- Search -->
     <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
         <input type="text"
+               id="search-input"
                name="query"
+               value="{{ query }}"
                placeholder="Search memories..."
                hx-get="/api/memories"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#memories-list"
                hx-include="this"
                hx-swap="innerHTML"
+               hx-push-url="true"
                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500">
     </div>
+
+    <script>
+        // Sync search input with URL query parameter
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('search-input');
+
+            // Update URL when input changes
+            searchInput.addEventListener('input', function() {
+                const query = searchInput.value.trim();
+                const url = new URL(window.location);
+
+                if (query) {
+                    url.searchParams.set('query', query);
+                } else {
+                    url.searchParams.delete('query');
+                }
+
+                window.history.pushState({}, '', url);
+            });
+        });
+    </script>
 
     <!-- Memories List -->
     <div id="memories-list" class="space-y-4">

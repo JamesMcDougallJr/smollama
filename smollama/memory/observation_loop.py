@@ -153,15 +153,34 @@ class ObservationLoop:
             past_observations=self._format_past_observations(past_obs),
         )
 
-        # 5. Run LLM query
-        response = await self._agent.query(prompt)
+        # 5. Run LLM query (with graceful degradation)
+        try:
+            response = await self._agent.query(prompt)
 
-        if not response:
-            logger.warning("No response from LLM for observation")
-            return
+            if not response:
+                logger.warning("No response from LLM for observation - operating in degraded mode")
+                # Store system observation about degraded mode
+                self._store.store_observation(
+                    text="System operating in degraded mode: LLM unavailable for observation generation",
+                    obs_type="status",
+                    confidence=1.0,
+                    related_sources=source_ids,
+                )
+                return
 
-        # 6. Parse and store observations
-        await self._process_response(response)
+            # 6. Parse and store observations
+            await self._process_response(response)
+
+        except Exception as e:
+            logger.error(f"LLM query failed during observation: {e}")
+            # Store system observation about the error
+            self._store.store_observation(
+                text=f"System operating in degraded mode: LLM error ({type(e).__name__})",
+                obs_type="status",
+                confidence=1.0,
+                related_sources=source_ids,
+            )
+            # Continue loop - sensor logging already completed
 
     def _format_current_readings(self, readings) -> str:
         """Format current readings for the prompt."""

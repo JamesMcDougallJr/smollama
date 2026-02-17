@@ -26,6 +26,7 @@ def create_app(
     store: LocalStore | None = None,
     readings: ReadingManager | None = None,
     gpio_reader: GPIOReader | None = None,
+    discovery_manager: Any = None,
 ) -> FastAPI:
     """Create the FastAPI dashboard application.
 
@@ -49,6 +50,7 @@ def create_app(
     app.state.store = store
     app.state.readings = readings
     app.state.gpio_reader = gpio_reader
+    app.state.discovery_manager = discovery_manager
 
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))

@@ -11,7 +11,7 @@
 # Options:
 #   --minimal            Install only core dependencies (no extras)
 #   --dev                Install with development dependencies
-#   --all                Install all optional dependencies (default)
+#   --all                Install all cross-platform dependencies (default)
 #   --non-interactive    No prompts, use defaults for all choices
 #   -n                   Short form of --non-interactive
 #   --help, -h           Show this help message
@@ -255,7 +255,26 @@ install_packages() {
   # Try UV first, fallback to pip
   if command -v uv &> /dev/null; then
     info "Using UV for fast installation..."
-    uv sync $extras
+
+    # For dev mode, use sync for editable install
+    # For minimal/all modes, use tool install for global CLI availability
+    if [[ "$mode" == "dev" ]]; then
+      uv sync $extras
+    else
+      # Use uv tool install for global CLI tool installation
+      local tool_package="."
+      case "$mode" in
+        all)
+          tool_package=".[all]"
+          ;;
+        minimal)
+          tool_package="."
+          ;;
+      esac
+
+      uv tool install --force "$tool_package"
+    fi
+
     success "Packages installed with UV"
   else
     info "Using pip for installation..."
@@ -266,21 +285,28 @@ install_packages() {
 
     # Determine pip extras format
     local pip_extras=""
+    local pip_flags=""
     case "$mode" in
       minimal)
         pip_extras="."
+        pip_flags="--user"
         ;;
       dev)
         pip_extras=".[dev]"
+        pip_flags="-e"
         ;;
       all)
         pip_extras=".[all]"
+        pip_flags="--user"
         ;;
     esac
 
-    "$python_cmd" -m pip install -e "$pip_extras"
+    "$python_cmd" -m pip install $pip_flags "$pip_extras"
     success "Packages installed with pip"
   fi
+
+  # Ensure tool directories are in PATH for next steps
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 }
 
 #
@@ -517,8 +543,24 @@ validate_installation() {
   fi
 
   # Check if smollama command is available
-  if command -v smollama &> /dev/null || "$python_cmd" -m smollama --version &> /dev/null; then
-    success "Smollama command is available"
+  if command -v smollama &> /dev/null; then
+    local smollama_path=$(command -v smollama)
+    success "Smollama command is available at: $smollama_path"
+  elif "$python_cmd" -m smollama --version &> /dev/null; then
+    success "Smollama module is available (use: python -m smollama)"
+    warn "Command 'smollama' not in PATH. Add the tools directory to your PATH:"
+    echo
+    echo "    ${COLOR_YELLOW}# UV tools are typically in ~/.local/bin${COLOR_RESET}"
+    echo "    ${COLOR_YELLOW}# For bash:${COLOR_RESET}"
+    echo "    ${COLOR_BLUE}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc${COLOR_RESET}"
+    echo "    ${COLOR_BLUE}source ~/.bashrc${COLOR_RESET}"
+    echo
+    echo "    ${COLOR_YELLOW}# For zsh (macOS default):${COLOR_RESET}"
+    echo "    ${COLOR_BLUE}echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc${COLOR_RESET}"
+    echo "    ${COLOR_BLUE}source ~/.zshrc${COLOR_RESET}"
+    echo
+    echo "    ${COLOR_YELLOW}# Or open a new terminal window${COLOR_RESET}"
+    echo
   else
     warn "Smollama command not found in PATH"
   fi
@@ -542,15 +584,26 @@ show_next_steps() {
   echo "     ${COLOR_BLUE}vim config.yaml${COLOR_RESET}"
   echo
   echo "  2. Check system status:"
-  echo "     ${COLOR_BLUE}smollama status${COLOR_RESET}"
+  if command -v smollama &> /dev/null; then
+    echo "     ${COLOR_BLUE}smollama status${COLOR_RESET}"
+  else
+    echo "     ${COLOR_BLUE}python -m smollama status${COLOR_RESET}"
+    echo "     ${COLOR_YELLOW}(or 'smollama status' after adding ~/.local/bin to PATH)${COLOR_RESET}"
+  fi
   echo
   echo "  3. Start the agent:"
   echo "     ${COLOR_BLUE}./scripts/start.sh${COLOR_RESET}"
-  echo "     or"
-  echo "     ${COLOR_BLUE}smollama run${COLOR_RESET}"
+  if command -v smollama &> /dev/null; then
+    echo "     or"
+    echo "     ${COLOR_BLUE}smollama run${COLOR_RESET}"
+  fi
   echo
   echo "  4. View available commands:"
-  echo "     ${COLOR_BLUE}smollama --help${COLOR_RESET}"
+  if command -v smollama &> /dev/null; then
+    echo "     ${COLOR_BLUE}smollama --help${COLOR_RESET}"
+  else
+    echo "     ${COLOR_BLUE}python -m smollama --help${COLOR_RESET}"
+  fi
   echo
 
   if [[ "$INSTALL_MODE" == "dev" ]]; then

@@ -15,12 +15,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pi = ["RPi.GPIO", "gpiozero"]
+# Platform-specific features
+pi = ["RPi.GPIO", "gpiozero"]  # Raspberry Pi GPIO support
+
+# Feature groups
 memory = ["sqlite-vec>=0.1.0"]
-dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0"]
-mem0 = ["httpx>=0.24.0"]
-dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx"]
-all = ["RPi.GPIO", "gpiozero", "sqlite-vec>=0.1.0", "fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "httpx>=0.24.0"]
+dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "zeroconf>=0.132.0"]
+mem0 = ["httpx[socks]>=0.24.0"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx[socks]"]
+
+# Cross-platform: all features that work on any system (Mac, Linux, Pi)
+all = ["sqlite-vec>=0.1.0", "fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "httpx[socks]>=0.24.0", "zeroconf>=0.132.0"]
 
 [project.scripts]
 smollama = "smollama.__main__:main"

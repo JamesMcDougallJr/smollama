@@ -84,24 +84,52 @@ class OllamaClient:
         )
 
     async def check_connection(self) -> bool:
-        """Check if Ollama is reachable and the model is available."""
+        """Check if Ollama is reachable (not whether the model is available)."""
         try:
             loop = asyncio.get_event_loop()
             models = await loop.run_in_executor(None, self._client.list)
-            model_names = [m["name"] for m in models.get("models", [])]
-            # Check if our configured model (or base name) is available
-            base_model = self.config.model.split(":")[0]
-            return any(base_model in name for name in model_names)
-        except Exception:
+            # If we can list models, Ollama is reachable
+            return True
+        except Exception as e:
+            # Log the error for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Ollama connection check failed: {type(e).__name__}: {e}")
             return False
 
     async def list_models(self) -> list[str]:
         """List available models."""
         try:
             loop = asyncio.get_event_loop()
-            models = await loop.run_in_executor(None, self._client.list)
-            return [m["name"] for m in models.get("models", [])]
-        except Exception:
+            models_response = await loop.run_in_executor(None, self._client.list)
+
+            # Handle different possible return types from ollama library
+            if hasattr(models_response, 'models'):
+                # If it's an object with .models attribute
+                models = models_response.models
+            elif isinstance(models_response, dict):
+                # If it's a dict with 'models' key
+                models = models_response.get("models", [])
+            else:
+                # If it's already a list
+                models = models_response if isinstance(models_response, list) else []
+
+            # Extract model names, handling both dict and object types
+            model_list = []
+            for m in models:
+                if isinstance(m, dict):
+                    model_list.append(m.get("name", m.get("model", "unknown")))
+                elif hasattr(m, 'name'):
+                    model_list.append(m.name)
+                elif hasattr(m, 'model'):
+                    model_list.append(m.model)
+
+            return model_list
+        except Exception as e:
+            # Log the error for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to list Ollama models: {type(e).__name__}: {e}")
             return []
 
 

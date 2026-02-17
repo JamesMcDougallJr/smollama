@@ -110,6 +110,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         from .dashboard import create_app
         from .memory import LocalStore, MockEmbeddings, OllamaEmbeddings
         from .readings import ReadingManager, SystemReadingProvider
+        from .discovery import DiscoveryManager
 
         import uvicorn
     except ImportError as e:
@@ -146,11 +147,31 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         gpio = GPIOReader(config.gpio)
         readings.register(GPIOReadingProvider(gpio))
 
+    # Initialize discovery manager if enabled
+    discovery_manager = None
+    if config.discovery.enabled:
+        # Determine node type for announcement
+        node_type = "llama" if config.mem0.bridge_enabled else "alpaca"
+
+        discovery_manager = DiscoveryManager(
+            node_name=config.node.name,
+            node_type=node_type,
+            port=args.port,
+            service_type=config.discovery.service_type,
+            announce=config.discovery.announce,
+            browse=config.discovery.browse,
+            cache_ttl_seconds=config.discovery.cache_ttl_seconds,
+        )
+
+        # Start discovery in background
+        await discovery_manager.start()
+        print(f"Discovery: Enabled (announcing as {node_type})")
+
     print(f"Starting Smollama Dashboard")
     print(f"Node: {config.node.name}")
     print(f"URL: http://{args.host}:{args.port}")
 
-    app = create_app(config, store=store, readings=readings, gpio_reader=gpio)
+    app = create_app(config, store=store, readings=readings, gpio_reader=gpio, discovery_manager=discovery_manager)
 
     try:
         verbose = getattr(args, "verbose", False)
@@ -163,6 +184,8 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         server = uvicorn.Server(config_uvicorn)
         await server.serve()
     finally:
+        if discovery_manager:
+            await discovery_manager.stop()
         store.close()
 
     return 0
@@ -496,6 +519,68 @@ def cmd_mem0_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_discovery_list(args: argparse.Namespace) -> int:
+    """List discovered nodes on the network."""
+    config = load_config(args.config)
+
+    try:
+        from .discovery import DiscoveryManager
+    except ImportError as e:
+        print(f"Discovery dependencies not installed: {e}", file=sys.stderr)
+        print("Install with: pip install smollama[dashboard]", file=sys.stderr)
+        return 1
+
+    # Determine node type for announcement
+    node_type = "llama" if config.mem0.bridge_enabled else "alpaca"
+
+    # Create discovery manager (browse only, no announcement)
+    discovery_manager = DiscoveryManager(
+        node_name=config.node.name,
+        node_type=node_type,
+        port=8080,
+        service_type=config.discovery.service_type,
+        announce=False,  # Don't announce, just browse
+        browse=True,
+        cache_ttl_seconds=config.discovery.cache_ttl_seconds,
+    )
+
+    print("Discovering Smollama nodes on local network...")
+    print()
+
+    try:
+        # Start discovery
+        await discovery_manager.start()
+
+        # Wait for discovery
+        await discovery_manager.wait_for_discovery(
+            timeout=config.discovery.discovery_timeout_seconds
+        )
+
+        # Get discovered nodes
+        nodes = await discovery_manager._browser.get_discovered_nodes()
+
+        if not nodes:
+            print("No nodes discovered.")
+            print()
+            print("Make sure:")
+            print("  1. Other nodes are running with dashboard enabled")
+            print("  2. Nodes are on the same local network")
+            print("  3. mDNS/Zeroconf is not blocked by firewall")
+        else:
+            print(f"Found {len(nodes)} node(s):")
+            print()
+            for node in nodes:
+                print(f"  • {node['node_name']} ({node['node_type']})")
+                print(f"    URL: {node['url']}")
+                print(f"    Last seen: {node['last_seen'].strftime('%Y-%m-%d %H:%M:%S')}")
+                print()
+
+    finally:
+        await discovery_manager.stop()
+
+    return 0
+
+
 def cmd_plugin_install(args: argparse.Namespace) -> int:
     """Install a plugin from a remote source."""
     import shutil
@@ -787,6 +872,14 @@ def main() -> int:
     )
     mem0_logs.set_defaults(func=cmd_mem0_logs)
 
+    # Discovery commands
+    discovery_parser = subparsers.add_parser("discovery", help="Discover Smollama nodes on local network")
+    discovery_subparsers = discovery_parser.add_subparsers(dest="discovery_command", help="Discovery commands")
+
+    # discovery list
+    discovery_list = discovery_subparsers.add_parser("list", help="List discovered nodes")
+    discovery_list.set_defaults(func=cmd_discovery_list, is_async=True)
+
     # Plugin commands
     plugin_parser = subparsers.add_parser("plugin", help="Manage plugins")
     plugin_subparsers = plugin_parser.add_subparsers(dest="plugin_command", help="Plugin commands")
@@ -815,6 +908,12 @@ def main() -> int:
     if args.command == "mem0":
         if not args.mem0_command:
             mem0_parser.print_help()
+            return 1
+
+    # Handle discovery subcommand requiring its own subcommand
+    if args.command == "discovery":
+        if not args.discovery_command:
+            discovery_parser.print_help()
             return 1
 
     # Handle plugin subcommand requiring its own subcommand

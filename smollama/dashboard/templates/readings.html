@@ -21,7 +21,7 @@
     <!-- Readings Grid -->
     <div id="readings-container"
          hx-get="/htmx/readings"
-         hx-trigger="every 5s"
+         hx-trigger="load, every 5s [!document.body.classList.contains('refresh-paused')]"
          hx-swap="innerHTML"
          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {% if readings %}

@@ -21,6 +21,13 @@
             <span class="text-lg text-gray-400 ml-1">{{ reading.unit }}</span>
             {% endif %}
         </div>
+
+        <!-- Sparkline for numeric values with history -->
+        {% if reading.history is defined %}
+            {% set full_id = reading.full_id %}
+            {% set history = reading.history %}
+            {% include "partials/sparkline.html" %}
+        {% endif %}
     </div>
     {% endfor %}
 {% else %}
