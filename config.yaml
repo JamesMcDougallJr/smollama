@@ -28,6 +28,30 @@ gpio:
       name: "door_switch"
       mode: "input"
 
+plugins:
+  paths: []
+
+  builtin:
+    gpio:
+      enabled: true
+      config:
+        mock: false
+        pins:
+          - pin: 17
+            name: "motion_sensor"
+            mode: "input"
+          - pin: 27
+            name: "door_switch"
+            mode: "input"
+    system:
+      enabled: true
+      config: {}
+    macos_temp:
+      enabled: true
+      config: {}
+
+  custom: []
+
 agent:
   system_prompt: |
     You are a home automation assistant running on a Raspberry Pi.
