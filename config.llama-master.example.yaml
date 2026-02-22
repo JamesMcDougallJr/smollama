@@ -1,0 +1,89 @@
+# Smollama Configuration: LLAMA NODE (Master)
+# =============================================
+#
+# This configuration runs on the central Llama master node.
+# Use this on your MacBook to aggregate data from Alpaca edge nodes.
+#
+# Setup:
+# 1. Copy this to config.yaml
+# 2. Update MQTT_BROKER_IP with your network's MQTT broker IP
+# 3. Run: python -m smollama
+
+node:
+  name: "llama-master"
+
+# Ollama on MacBook - use a larger model for reasoning
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama2:7b"  # Larger model for aggregation & reasoning
+
+# MQTT: Central message broker for node coordination
+mqtt:
+  broker: "192.168.1.100"  # CHANGE: IP of your MQTT broker machine
+  port: 1883
+  # Optional auth
+  # username: "smollama"
+  # password: "secret"
+  topics:
+    subscribe:
+      - "smollama/broadcast"        # Broadcast messages from any node
+      - "smollama/llama-master/#"   # Messages for this master node
+      - "smollama/pi-alpaca/#"      # Messages from Alpaca nodes (listen to their status)
+    publish_prefix: "smollama/llama-master"
+
+# Plugin system configuration
+plugins:
+  paths: []
+  builtin:
+    # No GPIO on MacBook, but keep system metrics
+    system:
+      enabled: true
+      config: {}
+  custom: []
+
+agent:
+  system_prompt: |
+    You are the central Llama node orchestrating a distributed LLM system.
+    You aggregate observations from edge Alpaca devices and provide semantic search
+    across the distributed memory system.
+
+    Available tools:
+    - search_observations: Search observations from all nodes
+    - search_memories: Search stored memories across nodes
+    - publish: Send messages to specific nodes or broadcast
+
+    Summarize trends and patterns you observe from multiple edge nodes.
+
+  max_tool_iterations: 10
+  ollama_retry_attempts: 3
+  ollama_retry_backoff_seconds: 2.0
+  ollama_fallback_mode: "skip"
+
+# Memory system configuration
+memory:
+  db_path: "~/.smollama/memory.db"
+  embedding_provider: "ollama"
+  embedding_model: "all-minilm:l6-v2"
+  observation_enabled: true
+  observation_interval_minutes: 15
+  observation_lookback_minutes: 60
+  sensor_log_retention_days: 90
+
+# CRDT sync configuration (this node is the aggregator)
+sync:
+  enabled: false  # Master doesn't sync elsewhere
+  llama_url: ""
+  sync_interval_minutes: 5
+  crdt_db_path: "~/.smollama/sync.db"
+
+# Mem0 semantic memory layer (ENABLED on Llama master only)
+# This aggregates all observations from edge nodes via Qdrant vector DB
+mem0:
+  enabled: true  # Enable on master node only
+  server_url: "http://localhost:8050"
+  bridge_enabled: true  # Accept syncs from Alpaca nodes
+  index_observations: true
+  index_memories: true
+  bridge_interval_seconds: 30
+  compose_file: "deploy/mem0/docker-compose.yml"

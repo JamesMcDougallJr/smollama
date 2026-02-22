@@ -1,0 +1,113 @@
+# Smollama Configuration: ALPACA NODE (Edge Device)
+# ==================================================
+#
+# This configuration runs on edge Raspberry Pi devices.
+# Use this on your Pi to collect sensor data and sync to the Llama master.
+#
+# Setup:
+# 1. Copy this to config.yaml on your Pi
+# 2. Update node.name, MQTT_BROKER_IP, and LLAMA_URL
+# 3. Configure your GPIO pins in the plugins.builtin.gpio section
+# 4. Run: python -m smollama
+
+node:
+  name: "pi-alpaca"  # CHANGE: Unique name for this Pi (e.g., "pi-living-room", "pi-basement")
+
+# Ollama on Raspberry Pi - use a small, fast model
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama3.2:1b"  # Small model optimized for Pi
+
+# MQTT: Connect to central broker for pub/sub coordination
+mqtt:
+  broker: "192.168.1.100"  # CHANGE: IP of your MQTT broker (or MacBook running it)
+  port: 1883
+  # Optional auth
+  # username: "smollama"
+  # password: "secret"
+  topics:
+    subscribe:
+      - "smollama/broadcast"        # Broadcast messages from any node
+      - "smollama/pi-alpaca/#"      # Messages for this specific Pi
+    publish_prefix: "smollama/pi-alpaca"  # This Pi publishes to its own topic
+
+# Plugin system configuration
+plugins:
+  paths: []
+  builtin:
+    # GPIO sensors on Raspberry Pi
+    gpio:
+      enabled: true
+      config:
+        mock: false  # Set to true for testing without hardware
+        pins:
+          - pin: 17
+            name: "motion_sensor"
+            mode: "input"
+          - pin: 27
+            name: "door_switch"
+            mode: "input"
+          # Add more GPIO pins as needed
+    # System metrics
+    system:
+      enabled: true
+      config: {}
+  custom: []
+
+# Legacy GPIO config (deprecated - use plugins.builtin.gpio instead)
+gpio:
+  mock: false
+  pins:
+    - pin: 17
+      name: "motion_sensor"
+      mode: "input"
+    - pin: 27
+      name: "door_switch"
+      mode: "input"
+
+agent:
+  system_prompt: |
+    You are an edge Alpaca node running on a Raspberry Pi.
+    You read local GPIO sensors and publish observations to the central Llama node.
+
+    When you detect patterns or anomalies:
+    - Use read_gpio to check sensor states
+    - Use list_gpio to see all available sensors
+    - Use publish to send observations and alerts
+
+    Be concise since you're running on limited hardware.
+    Focus on actionable observations that the master node can aggregate.
+
+  max_tool_iterations: 10
+  ollama_retry_attempts: 3
+  ollama_retry_backoff_seconds: 2.0
+  ollama_fallback_mode: "skip"
+
+# Memory system configuration
+memory:
+  db_path: "~/.smollama/memory.db"
+  embedding_provider: "ollama"
+  embedding_model: "all-minilm:l6-v2"
+  observation_enabled: true
+  observation_interval_minutes: 15
+  observation_lookback_minutes: 60
+  sensor_log_retention_days: 90
+
+# CRDT sync configuration: Sync observations to Llama master
+sync:
+  enabled: true  # Enable syncing on edge nodes
+  llama_url: "http://192.168.1.50:8000"  # CHANGE: IP of your MacBook (Llama node)
+  sync_interval_minutes: 5  # Sync every 5 minutes
+  crdt_db_path: "~/.smollama/sync.db"
+
+# Mem0 semantic memory layer (DISABLED on Alpaca nodes)
+# The master node handles aggregation via mem0
+mem0:
+  enabled: false  # Keep disabled on edge nodes
+  server_url: "http://192.168.1.50:8050"  # Master's mem0 server (if needed)
+  bridge_enabled: false
+  index_observations: true
+  index_memories: true
+  bridge_interval_seconds: 30
+  compose_file: "deploy/mem0/docker-compose.yml"
