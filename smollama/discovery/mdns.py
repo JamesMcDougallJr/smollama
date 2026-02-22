@@ -69,10 +69,10 @@ class ServiceAnnouncer:
 
         # Start zeroconf and register service
         self._zeroconf = AsyncZeroconf()
-        await self._zeroconf.async_register_service(self._service_info)
+        await self._zeroconf.async_register_service(self._service_info, allow_name_change=True)
 
         logger.info(
-            f"Announcing service: {service_name} at {local_ip}:{self.port} "
+            f"Announcing service: {self._service_info.name} at {local_ip}:{self.port} "
             f"(type={self.node_type})"
         )
 

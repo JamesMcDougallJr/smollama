@@ -1,0 +1,88 @@
+node:
+  name: "pi-alpaca"
+
+ollama:
+  host: "localhost"
+  port: 11434
+  model: "llama3.2:1b"
+
+mqtt:
+  broker: "10.0.0.90"  # Mac's IP (MQTT broker)
+  port: 1883
+  # Optional auth
+  # username: "smollama"
+  # password: "secret"
+  topics:
+    subscribe:
+      - "smollama/broadcast"
+      - "smollama/pi-alpaca/#"
+    publish_prefix: "smollama/pi-alpaca"
+
+plugins:
+  paths: []
+
+  builtin:
+    gpio:
+      enabled: true
+      config:
+        mock: false
+        pins:
+          - pin: 17
+            name: "motion_sensor"
+            mode: "input"
+          - pin: 27
+            name: "door_switch"
+            mode: "input"
+    system:
+      enabled: true
+      config: {}
+
+  custom: []
+
+agent:
+  system_prompt: |
+    You are an edge Alpaca node running on a Raspberry Pi.
+    You read local GPIO sensors and publish observations to the central Llama node.
+
+    When you detect patterns or anomalies:
+    - Use read_gpio to check sensor states
+    - Use list_gpio to see all available sensors
+    - Use publish to send observations and alerts
+
+    Be concise since you're running on limited hardware.
+    Focus on actionable observations that the master node can aggregate.
+
+  max_tool_iterations: 10
+  ollama_retry_attempts: 3
+  ollama_retry_backoff_seconds: 2.0
+  ollama_fallback_mode: "skip"
+
+# Memory system configuration
+memory:
+  db_path: "~/.smollama/memory.db"
+  embedding_provider: "ollama"
+  embedding_model: "all-minilm:l6-v2"
+  observation_enabled: true
+  observation_interval_minutes: 15
+  observation_lookback_minutes: 60
+  sensor_log_retention_days: 90
+
+# CRDT sync configuration: sync observations to Llama master
+sync:
+  enabled: true
+  llama_url: "http://10.0.0.90:8000"  # Mac's IP (Llama master)
+  sync_interval_minutes: 5
+  crdt_db_path: "~/.smollama/sync.db"
+
+# Mem0 semantic memory layer (disabled on edge nodes)
+mem0:
+  enabled: false
+  server_url: "http://10.0.0.90:8050"
+  bridge_enabled: false
+  index_observations: true
+  index_memories: true
+  bridge_interval_seconds: 30
+  compose_file: "deploy/mem0/docker-compose.yml"
+
+discovery:
+  enabled: false

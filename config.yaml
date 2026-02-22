@@ -1,10 +1,10 @@
 node:
-  name: "pi-living-room"
+  name: "llama-master"
 
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3.2:1b"  # Small model for Pi
+  model: "llama3.2:1b"
 
 mqtt:
   broker: "localhost"
@@ -15,34 +15,14 @@ mqtt:
   topics:
     subscribe:
       - "smollama/broadcast"
-      - "smollama/pi-living-room/#"
-    publish_prefix: "smollama/pi-living-room"
-
-gpio:
-  mock: false  # Set to true for development without Pi hardware
-  pins:
-    - pin: 17
-      name: "motion_sensor"
-      mode: "input"
-    - pin: 27
-      name: "door_switch"
-      mode: "input"
+      - "smollama/llama-master/#"
+      - "smollama/pi-alpaca/#"
+    publish_prefix: "smollama/llama-master"
 
 plugins:
   paths: []
 
   builtin:
-    gpio:
-      enabled: true
-      config:
-        mock: false
-        pins:
-          - pin: 17
-            name: "motion_sensor"
-            mode: "input"
-          - pin: 27
-            name: "door_switch"
-            mode: "input"
     system:
       enabled: true
       config: {}
@@ -54,16 +34,21 @@ plugins:
 
 agent:
   system_prompt: |
-    You are a home automation assistant running on a Raspberry Pi.
-    You can read GPIO sensors and communicate with other nodes via MQTT.
+    You are the central Llama node orchestrating a distributed LLM system.
+    You aggregate observations from edge Alpaca devices and provide semantic search
+    across the distributed memory system.
 
-    When you receive messages, respond helpfully and use your tools when needed:
-    - Use read_gpio to check sensor states
-    - Use list_gpio to see all available sensors
-    - Use publish to send messages to other nodes
-    - Use get_recent_messages to see message history
+    Available tools:
+    - search_observations: Search observations from all nodes
+    - search_memories: Search stored memories across nodes
+    - publish: Send messages to specific nodes or broadcast
 
-    Be concise in your responses since you're running on limited hardware.
+    Summarize trends and patterns you observe from multiple edge nodes.
+
+  max_tool_iterations: 10
+  ollama_retry_attempts: 3
+  ollama_retry_backoff_seconds: 2.0
+  ollama_fallback_mode: "skip"
 
 # Memory system configuration
 memory:
@@ -75,19 +60,18 @@ memory:
   observation_lookback_minutes: 60
   sensor_log_retention_days: 90
 
-# CRDT sync configuration (for multi-node setups)
+# CRDT sync configuration (master doesn't sync elsewhere)
 sync:
-  enabled: true
-  llama_url: ""  # URL of the Llama master node for syncing
+  enabled: false
+  llama_url: ""
   sync_interval_minutes: 5
   crdt_db_path: "~/.smollama/sync.db"
 
-# Mem0 semantic memory layer (Llama node only)
-# Provides cross-node semantic search via mem0 + Qdrant
+# Mem0 semantic memory layer (enabled on Llama master)
 mem0:
-  enabled: false  # Enable on Llama (master) node
+  enabled: true
   server_url: "http://localhost:8050"
-  bridge_enabled: false  # Only set true on Llama node
+  bridge_enabled: true
   index_observations: true
   index_memories: true
   bridge_interval_seconds: 30
@@ -95,4 +79,3 @@ mem0:
 
 discovery:
   enabled: false
-
