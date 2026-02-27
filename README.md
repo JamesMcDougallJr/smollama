@@ -1,5 +1,8 @@
 # Smollama
 
+<img width="300" height="450" alt="image" src="https://github.com/user-attachments/assets/5ce2c3bc-4fc8-4e98-bf90-e7b1b6f1caaa" />
+
+
 A distributed LLM coordination system for Raspberry Pi and small computers with offline-first memory and sync capabilities.
 
 ## Overview
