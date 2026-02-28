@@ -35,6 +35,9 @@ MQTT_PORT="1883"
 INSTALL_MODE="all"
 NON_INTERACTIVE=false
 
+# Set to true when no suitable system Python was found and UV manages Python instead
+UV_PYTHON_MANAGED=false
+
 # Colors for output
 if [[ -t 1 ]]; then
   COLOR_RESET="\033[0m"
@@ -149,9 +152,22 @@ check_python_version() {
   local python_version=""
   local required_version="$1"
 
-  # Try python3 first, then python
-  for cmd in python3 python; do
-    if command -v "$cmd" &> /dev/null; then
+  # Candidate binary names — versioned ones first so we pick the newest available
+  local candidates=(python3.12 python3.11 python3.10 python3 python)
+
+  # Also check common non-PATH locations
+  local extra_paths=(
+    "$HOME/.pyenv/shims/python3"
+    "/opt/homebrew/bin/python3.12"
+    "/opt/homebrew/bin/python3.11"
+    "/opt/homebrew/bin/python3.10"
+    "/usr/local/bin/python3.12"
+    "/usr/local/bin/python3.11"
+    "/usr/local/bin/python3.10"
+  )
+
+  for cmd in "${candidates[@]}" "${extra_paths[@]}"; do
+    if command -v "$cmd" &> /dev/null || [[ -x "$cmd" ]]; then
       python_version=$("$cmd" --version 2>&1 | awk '{print $2}')
       if [[ "$(printf '%s\n' "$required_version" "$python_version" | sort -V | head -n1)" == "$required_version" ]]; then
         python_cmd="$cmd"
@@ -161,6 +177,34 @@ check_python_version() {
   done
 
   echo "$python_cmd"
+}
+
+#
+# UV-managed Python fallback
+#
+
+find_or_install_python_via_uv() {
+  if ! command -v uv &> /dev/null; then
+    return 1
+  fi
+
+  info "Looking for Python $PYTHON_MIN_VERSION via UV's managed runtimes..."
+
+  # Check if uv already has a managed Python >= 3.10
+  if uv python find "$PYTHON_MIN_VERSION" &> /dev/null 2>&1; then
+    success "Found UV-managed Python $PYTHON_MIN_VERSION"
+    UV_PYTHON_MANAGED=true
+    return 0
+  fi
+
+  info "Installing Python $PYTHON_MIN_VERSION via UV (no system Python required)..."
+  if uv python install "$PYTHON_MIN_VERSION"; then
+    success "UV installed Python $PYTHON_MIN_VERSION"
+    UV_PYTHON_MANAGED=true
+    return 0
+  fi
+
+  return 1
 }
 
 #
@@ -272,7 +316,11 @@ install_packages() {
           ;;
       esac
 
-      uv tool install --force "$tool_package"
+      if [[ "$UV_PYTHON_MANAGED" == true ]]; then
+        uv tool install --force --python "$PYTHON_MIN_VERSION" "$tool_package"
+      else
+        uv tool install --force "$tool_package"
+      fi
     fi
 
     success "Packages installed with UV"
@@ -526,27 +574,32 @@ install_mosquitto() {
 validate_installation() {
   info "Validating installation..."
 
-  # Check Python import
-  local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
-  if [[ -z "$python_cmd" ]]; then
-    error "Python validation failed"
-  fi
-
   cd "$PROJECT_ROOT"
 
-  # Try to import smollama
-  if "$python_cmd" -c "import smollama; print('OK')" &> /dev/null; then
-    success "Python package import successful"
+  # Try to import smollama — prefer system Python, fall back to uv run
+  local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+
+  if [[ -n "$python_cmd" ]]; then
+    if "$python_cmd" -c "import smollama; print('OK')" &> /dev/null; then
+      success "Python package import successful"
+    else
+      warn "Could not import smollama package via system Python"
+    fi
+  elif [[ "$UV_PYTHON_MANAGED" == true ]] && command -v uv &> /dev/null; then
+    if uv run --python "$PYTHON_MIN_VERSION" python -c "import smollama; print('OK')" &> /dev/null; then
+      success "Python package import successful (via UV-managed Python)"
+    else
+      warn "Could not import smollama package via UV-managed Python"
+    fi
   else
-    warn "Could not import smollama package"
-    return 1
+    warn "No suitable Python found for import validation — skipping"
   fi
 
   # Check if smollama command is available
   if command -v smollama &> /dev/null; then
     local smollama_path=$(command -v smollama)
     success "Smollama command is available at: $smollama_path"
-  elif "$python_cmd" -m smollama --version &> /dev/null; then
+  elif [[ -n "$python_cmd" ]] && "$python_cmd" -m smollama --version &> /dev/null; then
     success "Smollama module is available (use: python -m smollama)"
     warn "Command 'smollama' not in PATH. Add the tools directory to your PATH:"
     echo
@@ -645,38 +698,67 @@ main() {
   success "Platform: $os_type ($pkg_manager)"
   echo
 
-  # Check Python version
+  # Install UV first — it's a static binary and doesn't need Python
+  install_uv
+  echo
+
+  # Check Python version (searches versioned binaries and common extra paths)
   info "Checking Python version..."
   local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
 
   if [[ -z "$python_cmd" ]]; then
-    warn "Python $PYTHON_MIN_VERSION or higher not found"
+    warn "No system Python $PYTHON_MIN_VERSION+ found"
 
-    if [[ "$NON_INTERACTIVE" == true ]]; then
-      install_python "$os_type" "$pkg_manager"
+    # UV fallback: let UV download and manage Python 3.10 for us
+    if command -v uv &> /dev/null; then
+      if find_or_install_python_via_uv; then
+        info "UV will manage Python $PYTHON_MIN_VERSION for the smollama environment"
+      else
+        # UV is present but couldn't install — offer system install as last resort
+        if [[ "$NON_INTERACTIVE" == true ]]; then
+          install_python "$os_type" "$pkg_manager"
+        else
+          read -p "Install Python $PYTHON_MIN_VERSION via system package manager? (y/n) " -n 1 -r
+          echo
+          if [[ $REPLY =~ ^[Yy]$ ]]; then
+            install_python "$os_type" "$pkg_manager"
+          else
+            error "Python $PYTHON_MIN_VERSION or higher is required. Install it manually or re-run the script."
+          fi
+        fi
+
+        python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+        if [[ -z "$python_cmd" && "$UV_PYTHON_MANAGED" == false ]]; then
+          error "Python installation failed or version still below $PYTHON_MIN_VERSION"
+        fi
+      fi
     else
-      read -p "Install Python $PYTHON_MIN_VERSION? (y/n) " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]]; then
+      # UV unavailable — fall back to system package manager
+      if [[ "$NON_INTERACTIVE" == true ]]; then
         install_python "$os_type" "$pkg_manager"
       else
-        error "Python $PYTHON_MIN_VERSION or higher is required"
+        read -p "Install Python $PYTHON_MIN_VERSION? (y/n) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+          install_python "$os_type" "$pkg_manager"
+        else
+          error "Python $PYTHON_MIN_VERSION or higher is required"
+        fi
       fi
-    fi
 
-    # Re-check after installation
-    python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
-    if [[ -z "$python_cmd" ]]; then
-      error "Python installation failed or version still below $PYTHON_MIN_VERSION"
+      python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+      if [[ -z "$python_cmd" ]]; then
+        error "Python installation failed or version still below $PYTHON_MIN_VERSION"
+      fi
     fi
   fi
 
-  local python_version=$("$python_cmd" --version 2>&1 | awk '{print $2}')
-  success "Python $python_version ($python_cmd)"
-  echo
-
-  # Install UV
-  install_uv
+  if [[ -n "$python_cmd" ]]; then
+    local python_version=$("$python_cmd" --version 2>&1 | awk '{print $2}')
+    success "Python $python_version ($python_cmd)"
+  else
+    success "Python $PYTHON_MIN_VERSION will be managed by UV"
+  fi
   echo
 
   # Install packages
