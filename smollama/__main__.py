@@ -14,6 +14,7 @@ from .config import load_config
 from .agent import run_agent
 from .ollama_client import OllamaClient
 from .mqtt_client import MQTTClient
+from .preflight import run_preflight
 
 
 class JSONFormatter(logging.Formatter):
@@ -81,6 +82,25 @@ def setup_logging(verbose: bool = False, log_level: str | None = None, json_outp
 async def cmd_run(args: argparse.Namespace) -> int:
     """Run the agent."""
     config = load_config(args.config)
+
+    # Run preflight checks unless skipped
+    if not getattr(args, "skip_preflight", False):
+        print("Running preflight checks...")
+        preflight_result = await run_preflight(config)
+
+        for action in preflight_result.actions_taken:
+            print(f"  [action] {action}")
+        for warning in preflight_result.warnings:
+            print(f"  [warning] {warning}")
+        for error in preflight_result.errors:
+            print(f"  [error] {error}")
+
+        if not preflight_result.passed:
+            print("\nPreflight checks failed. Fix the errors above or use --skip-preflight.")
+            return 1
+
+        if preflight_result.actions_taken or preflight_result.warnings:
+            print()
 
     print(f"Starting Smollama node: {config.node.name}")
     print(f"Ollama: {config.ollama.base_url} (model: {config.ollama.model})")
@@ -814,6 +834,11 @@ def main() -> int:
 
     # Run command
     run_parser = subparsers.add_parser("run", help="Start the agent")
+    run_parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip preflight checks",
+    )
     run_parser.set_defaults(func=cmd_run)
 
     # Status command

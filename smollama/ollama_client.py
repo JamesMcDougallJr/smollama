@@ -132,6 +132,31 @@ class OllamaClient:
             logger.warning(f"Failed to list Ollama models: {type(e).__name__}: {e}")
             return []
 
+    async def pull_model(self, model: str) -> bool:
+        """Pull a model via the ollama Python library.
+
+        Args:
+            model: Model name to pull (e.g. 'llama3.2:1b').
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.info(f"Pulling model '{model}' via ollama library...")
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: self._client.pull(model))
+            logger.info(f"Successfully pulled model '{model}'")
+            return True
+        except Exception as e:
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to pull model '{model}': {type(e).__name__}: {e}")
+            return False
+
 
 def format_tool_result(tool_name: str, result: Any) -> dict[str, Any]:
     """Format a tool result for inclusion in messages.

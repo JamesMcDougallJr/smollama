@@ -257,16 +257,50 @@ def _parse_gpio_pins(data: list) -> list[GPIOPinConfig]:
     return pins
 
 
+def _discover_config_path() -> Path | None:
+    """Search standard locations for a config file.
+
+    Search order:
+        1. ./config.yaml
+        2. ./config.yml
+        3. ~/.smollama/config.yaml
+        4. ~/.smollama/config.yml
+
+    Returns:
+        Path to first existing config file, or None.
+    """
+    candidates = [
+        Path("config.yaml"),
+        Path("config.yml"),
+        Path.home() / ".smollama" / "config.yaml",
+        Path.home() / ".smollama" / "config.yml",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def load_config(config_path: str | Path | None = None) -> Config:
     """Load configuration from YAML file with environment variable overrides.
 
     Args:
-        config_path: Path to YAML config file. If None, uses default config.
+        config_path: Path to YAML config file. If None, auto-discovers config.
 
     Returns:
         Loaded and validated Config object.
     """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
     config = Config()
+
+    if config_path is None:
+        discovered = _discover_config_path()
+        if discovered:
+            logger.info(f"Using config file: {discovered}")
+            config_path = discovered
 
     if config_path:
         path = Path(config_path)

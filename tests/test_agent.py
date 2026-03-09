@@ -174,11 +174,16 @@ class TestAgent:
 class TestConfig:
     """Tests for configuration loading."""
 
-    def test_default_config(self):
+    def test_default_config(self, tmp_path, monkeypatch):
         """Test default configuration values."""
         from smollama.config import load_config
+        from unittest.mock import patch
+        from pathlib import Path
 
-        config = load_config()
+        # Run from a dir with no config files so auto-discovery returns None
+        monkeypatch.chdir(tmp_path)
+        with patch.object(Path, "home", return_value=tmp_path):
+            config = load_config()
 
         assert config.node.name == "smollama-node"
         assert config.ollama.host == "localhost"
@@ -186,15 +191,20 @@ class TestConfig:
         assert config.mqtt.broker == "localhost"
         assert config.mqtt.port == 1883
 
-    def test_env_override(self, monkeypatch):
+    def test_env_override(self, tmp_path, monkeypatch):
         """Test environment variable overrides."""
         from smollama.config import load_config
+        from unittest.mock import patch
+        from pathlib import Path
 
+        # Run from a dir with no config files
+        monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("SMOLLAMA_NODE_NAME", "env-node")
         monkeypatch.setenv("SMOLLAMA_OLLAMA_HOST", "ollama.local")
         monkeypatch.setenv("SMOLLAMA_MQTT_BROKER", "mqtt.local")
 
-        config = load_config()
+        with patch.object(Path, "home", return_value=tmp_path):
+            config = load_config()
 
         assert config.node.name == "env-node"
         assert config.ollama.host == "ollama.local"
