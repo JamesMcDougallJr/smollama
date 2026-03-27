@@ -9,6 +9,7 @@ description = "A distributed LLM coordination system for Raspberry Pi and small 
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "jsonschema>=4.26.0",
     "ollama>=0.4",
     "paho-mqtt>=2.0",
     "pyyaml>=6.0",
@@ -16,10 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # Platform-specific features
-pi = ["RPi.GPIO", "gpiozero"]  # Raspberry Pi GPIO support
+pi = ["RPi.GPIO", "gpiozero", "lgpio>=0.2"]  # Raspberry Pi GPIO support
 
 # Feature groups
-memory = ["sqlite-vec>=0.1.0"]
+memory = ["sqlite-vec>=0.1.7"]
 dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "zeroconf>=0.132.0"]
 mem0 = ["httpx[socks]>=0.24.0"]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx[socks]"]

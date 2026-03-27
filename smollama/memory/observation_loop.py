@@ -160,9 +160,9 @@ class ObservationLoop:
             if not response:
                 logger.warning("No response from LLM for observation - operating in degraded mode")
                 # Store system observation about degraded mode
-                self._store.store_observation(
+                self._store.add_observation(
                     text="System operating in degraded mode: LLM unavailable for observation generation",
-                    obs_type="status",
+                    observation_type="status",
                     confidence=1.0,
                     related_sources=source_ids,
                 )
@@ -174,9 +174,9 @@ class ObservationLoop:
         except Exception as e:
             logger.error(f"LLM query failed during observation: {e}")
             # Store system observation about the error
-            self._store.store_observation(
+            self._store.add_observation(
                 text=f"System operating in degraded mode: LLM error ({type(e).__name__})",
-                obs_type="status",
+                observation_type="status",
                 confidence=1.0,
                 related_sources=source_ids,
             )

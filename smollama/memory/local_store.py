@@ -423,9 +423,8 @@ class LocalStore:
                 v.distance
             FROM observations_vec v
             JOIN observations o ON o.id = v.observation_id
-            WHERE v.embedding MATCH ?
+            WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
-            LIMIT ?
             """,
             (query_embedding, limit),
         )
@@ -587,9 +586,8 @@ class LocalStore:
                 v.distance
             FROM memories_vec v
             JOIN memories m ON m.id = v.memory_id
-            WHERE v.embedding MATCH ?
+            WHERE v.embedding MATCH ? AND k = ?
             ORDER BY v.distance
-            LIMIT ?
             """,
             (query_embedding, limit * 2),  # Fetch extra to filter
         )

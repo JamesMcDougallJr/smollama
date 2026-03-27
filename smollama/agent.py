@@ -15,6 +15,7 @@ from .ollama_client import (
     format_tool_result,
     format_assistant_tool_calls,
 )
+from .plugins.loader import PluginLoader
 from .readings import GPIOReadingProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
@@ -38,8 +39,23 @@ class Agent:
         self._mqtt = MQTTClient(config.mqtt)
         self._gpio = GPIOReader(config.gpio)
 
+        # Initialize plugin loader and load sensor plugins
+        self._plugin_loader = PluginLoader(additional_paths=config.plugins.paths)
+        self._plugin_loader.discover_plugins()
+        plugin_configs = {
+            name: cfg.config
+            for name, cfg in config.plugins.builtin.items()
+            if cfg.enabled
+        }
+        plugin_configs.update({
+            cfg.name: cfg.config
+            for cfg in config.plugins.custom
+            if cfg.enabled
+        })
+        self._plugin_loader.load_all_plugins(plugin_configs)
+
         # Initialize unified reading manager
-        self._readings = ReadingManager()
+        self._readings = ReadingManager(plugin_loader=self._plugin_loader)
         self._readings.register(GPIOReadingProvider(self._gpio))
         self._readings.register(SystemReadingProvider())
 
@@ -245,6 +261,7 @@ class Agent:
         # Disconnect from services
         await self._mqtt.disconnect()
         self._gpio.cleanup()
+        self._plugin_loader.shutdown_plugins()
         self._memory.close()
 
         logger.info("Agent stopped")

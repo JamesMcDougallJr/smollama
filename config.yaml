@@ -4,7 +4,7 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3.2:1b"
+  model: "ministral-3:3b"
 
 mqtt:
   broker: "localhost"
@@ -27,8 +27,15 @@ plugins:
       enabled: true
       config: {}
     macos_temp:
-      enabled: true
+      enabled: false
       config: {}
+    hcsr04:
+      enabled: true
+      config:
+        trig_pin: 23
+        echo_pin: 24
+        max_distance: 4.0
+        chip: 0
 
   custom: []
 

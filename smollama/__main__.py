@@ -129,6 +129,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     try:
         from .dashboard import create_app
         from .memory import LocalStore, MockEmbeddings, OllamaEmbeddings
+        from .plugins.loader import PluginLoader
         from .readings import ReadingManager, SystemReadingProvider
         from .discovery import DiscoveryManager
 
@@ -154,8 +155,23 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     )
     store.connect()
 
+    # Initialize plugin loader and load sensor plugins
+    plugin_loader = PluginLoader(additional_paths=config.plugins.paths)
+    plugin_loader.discover_plugins()
+    plugin_configs = {
+        name: cfg.config
+        for name, cfg in config.plugins.builtin.items()
+        if cfg.enabled
+    }
+    plugin_configs.update({
+        cfg.name: cfg.config
+        for cfg in config.plugins.custom
+        if cfg.enabled
+    })
+    plugin_loader.load_all_plugins(plugin_configs)
+
     # Initialize readings manager
-    readings = ReadingManager()
+    readings = ReadingManager(plugin_loader=plugin_loader)
     readings.register(SystemReadingProvider())
 
     # Optionally add GPIO if configured
@@ -206,6 +222,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     finally:
         if discovery_manager:
             await discovery_manager.stop()
+        plugin_loader.shutdown_plugins()
         store.close()
 
     return 0

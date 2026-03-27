@@ -1,7 +1,10 @@
 """GPIO sensor plugin for Raspberry Pi."""
 
+import logging
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from smollama.config import GPIOConfig
 from smollama.gpio_reader import GPIOReader
@@ -87,8 +90,9 @@ class GPIOSensorPlugin(SensorPlugin):
 
     def setup(self) -> None:
         """Initialize the GPIO reader."""
-        if self._config is None:
-            raise ValueError("GPIO config not provided")
+        if self._config is None or not self._config.pins:
+            logger.debug("GPIO plugin: no pins configured, skipping setup")
+            return
 
         self._gpio_reader = GPIOReader(self._config)
         self._gpio_reader.setup()
