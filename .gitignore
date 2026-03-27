@@ -34,8 +34,6 @@ Thumbs.db
 
 # Claude
 .claude/
-CLAUDE.md
-**/CLAUDE.md
 
 .gitconfig
 .gitmodules
