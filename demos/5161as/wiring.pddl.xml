@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wiring component="5161as" board="raspberry-pi">
+  <!-- Verified by live hardware testing, April 2026 -->
+  <!-- Component oriented with dp at bottom-right (landmark satisfied) -->
+
+  <connection signal="common" to="GND">
+    <via type="direct" />
+    <pins>3 8</pins>
+    <note>Pi Pin 9 → DIP Pin 8; Pi Pin 25 → DIP Pin 3. No resistor on common cathode.</note>
+  </connection>
+
+  <connection signal="seg_a"  bcm="27" header="13"><via resistor="220R" /></connection>
+  <connection signal="seg_b"  bcm="22" header="15"><via resistor="220R" /></connection>
+  <connection signal="seg_c"  bcm="11" header="23"><via resistor="220R" /></connection>
+  <connection signal="seg_d"  bcm="8"  header="24"><via resistor="220R" /></connection>
+  <connection signal="seg_e"  bcm="10" header="19"><via resistor="220R" /></connection>
+  <connection signal="seg_f"  bcm="17" header="11"><via resistor="220R" /></connection>
+  <connection signal="seg_g"  bcm="4"  header="7" ><via resistor="220R" />
+    <note>BCM 7/8 have hardware pull-ups — BCM 4 used instead</note>
+  </connection>
+  <connection signal="seg_dp" bcm="9"  header="21"><via resistor="220R" /></connection>
+
+  <!--
+    Derived plugin config:
+    segment_pins: {a: 27, b: 22, c: 11, d: 8, e: 10, f: 17, g: 4, dp: 9}
+    SEG_PINS (a b c d e f g dp): [27, 22, 11, 8, 10, 17, 4, 9]
+  -->
+</wiring>
