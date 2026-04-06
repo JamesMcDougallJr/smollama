@@ -158,6 +158,11 @@ class Agent:
         if self._mem0_client:
             self._tools.register(CrossNodeRecallTool(self._mem0_client))
 
+        # Tool plugins (e.g. display devices) loaded from plugin loader
+        for tool_plugin in self._plugin_loader.get_tool_plugins():
+            for tool in tool_plugin.get_tools():
+                self._tools.register(tool)
+
         # Conversation history for context
         self._system_message = {
             "role": "system",

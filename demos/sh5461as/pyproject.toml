@@ -1,0 +1,12 @@
+[project]
+name = "sh5461as-demo"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "RPi.GPIO>=0.7",
+]
+
+[dependency-groups]
+pi5 = [
+    "lgpio>=0.2",
+]

@@ -39,6 +39,23 @@ plugins:
     system:
       enabled: true
       config: {}  # System plugin has no configuration
+    hcsr04:
+      enabled: false  # Enable only if HC-SR04 is physically wired
+      config:
+        trig_pin: 23   # BCM 23, Pi Pin 16
+        echo_pin: 24   # BCM 24, Pi Pin 18 (via voltage divider)
+        max_distance: 4.0
+        chip: 0
+    sh5461as:
+      enabled: false  # Enable only if SH5461AS display is physically wired
+      config:
+        digit_pins: [17, 27, 22, 5]           # BCM pins for D1–D4 (left to right)
+        segment_pins: {a: 6, b: 13, c: 19, d: 26, e: 21, f: 20, g: 16, dp: 12}
+    s5161as:
+      enabled: false  # Enable only if 5161AS single-digit display is physically wired
+      config:
+        segment_pins: {a: 27, b: 22, c: 11, d: 8, e: 10, f: 17, g: 4, dp: 9}
+        common_pin: null  # BCM pin for common cathode, or null if tied directly to GND
 
   # Custom plugins (installed via `smollama plugin install`)
   custom: []

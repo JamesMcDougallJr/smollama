@@ -1,0 +1,56 @@
+component: 5161as
+board: raspberry-pi  # compatible Pi 4 (RPi.GPIO) and Pi 5 (lgpio)
+
+# Verified by live hardware testing — segment-by-segment probe April 2026.
+# Component was oriented with dp at bottom-right (landmark satisfied).
+
+connections:
+  - signal: common
+    to: GND
+    via: direct
+    pins: [3, 8]   # both COM pins connect directly to GND; no resistor
+    note: "Pi Pin 9 → DIP Pin 8; Pi Pin 25 → DIP Pin 3"
+
+  - signal: seg_a
+    to: {bcm: 27, header: 13}
+    via: {resistor: 220R}
+    note: "DIP Pin 7, top bar"
+
+  - signal: seg_b
+    to: {bcm: 22, header: 15}
+    via: {resistor: 220R}
+    note: "DIP Pin 6, upper-right"
+
+  - signal: seg_c
+    to: {bcm: 11, header: 23}
+    via: {resistor: 220R}
+    note: "DIP Pin 4, lower-right"
+
+  - signal: seg_d
+    to: {bcm: 8, header: 24}
+    via: {resistor: 220R}
+    note: "DIP Pin 2, bottom bar"
+
+  - signal: seg_e
+    to: {bcm: 10, header: 19}
+    via: {resistor: 220R}
+    note: "DIP Pin 1, lower-left"
+
+  - signal: seg_f
+    to: {bcm: 17, header: 11}
+    via: {resistor: 220R}
+    note: "DIP Pin 9, upper-left"
+
+  - signal: seg_g
+    to: {bcm: 4, header: 7}
+    via: {resistor: 220R}
+    note: "DIP Pin 10, middle bar. BCM 4 was chosen because BCM 7/8 have hardware pull-ups."
+
+  - signal: seg_dp
+    to: {bcm: 9, header: 21}
+    via: {resistor: 220R}
+    note: "DIP Pin 5, decimal point"
+
+# Derived plugin config (segment_pins dict) — generated from above:
+# segment_pins: {a: 27, b: 22, c: 11, d: 8, e: 10, f: 17, g: 4, dp: 9}
+# SEG_PINS (a b c d e f g dp): [27, 22, 11, 8, 10, 17, 4, 9]
