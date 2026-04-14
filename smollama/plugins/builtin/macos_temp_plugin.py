@@ -7,11 +7,11 @@ import sys
 from datetime import datetime
 from typing import Any
 
-from smollama.plugins.base import PluginMetadata, SensorPlugin
+from smollama.plugins.base import PluginMetadata, ReadPlugin
 from smollama.readings.base import Reading
 
 
-class MacOSTempPlugin(SensorPlugin):
+class MacOSTempPlugin(ReadPlugin):
     """Plugin providing CPU temperature on macOS via osx-cpu-temp (SMC).
 
     Reads from the System Management Controller using the osx-cpu-temp
@@ -29,7 +29,7 @@ class MacOSTempPlugin(SensorPlugin):
             author="Smollama Team",
             description="macOS CPU temperature via osx-cpu-temp (SMC)",
             dependencies=[],  # binary dep, not a Python package
-            plugin_type="sensor",
+            plugin_type="read",
         )
 
     @property

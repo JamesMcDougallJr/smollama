@@ -1,0 +1,6 @@
+[project]
+name = "lcd-1602a-demo"
+version = "0.1.0"
+description = "Standalone demo for the QAPASS 1602A LCD display via I2C backpack"
+requires-python = ">=3.10"
+dependencies = ["RPLCD>=1.3"]

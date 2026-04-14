@@ -22,7 +22,7 @@ def test_config():
     """Create a test configuration."""
     return Config(
         node=NodeConfig(name="test-node"),
-        ollama=OllamaConfig(host="localhost", port=11434, model="llama3.2:1b"),
+        ollama=OllamaConfig(host="localhost", port=11434, model="gemma4:e2b"),
         mqtt=MQTTConfig(
             broker="localhost",
             port=1883,

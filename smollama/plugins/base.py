@@ -1,6 +1,6 @@
 """Base classes for the plugin system."""
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,59 +27,22 @@ class PluginMetadata:
     dependencies: list[str] = field(default_factory=list)
     """List of Python package dependencies (e.g., ['gpiozero>=2.0', 'RPi.GPIO'])"""
 
-    plugin_type: str = "sensor"
-    """Type of plugin: 'sensor' or 'tool'"""
+    plugin_type: str = "read"
+    """Type of plugin: 'read', 'write', or 'readwrite'. Legacy values 'sensor'/'tool' still accepted."""
 
 
-class SensorPlugin(ReadingProvider):
-    """Extended interface for pluggable sensors.
+class PluginLifecycleMixin(ABC):
+    """Shared lifecycle hooks for all plugin types.
 
-    Sensor plugins extend ReadingProvider with lifecycle hooks,
-    dependency checking, and config validation.
-
-    Example:
-        class MyTemperatureSensor(SensorPlugin):
-            @property
-            def source_type(self) -> str:
-                return "i2c_temp"
-
-            @property
-            def metadata(self) -> PluginMetadata:
-                return PluginMetadata(
-                    name="i2c_temp",
-                    version="1.0.0",
-                    author="Your Name",
-                    description="I2C temperature sensor",
-                    dependencies=["smbus2>=0.4.0"],
-                    plugin_type="sensor"
-                )
-
-            def check_dependencies(self) -> tuple[bool, str | None]:
-                try:
-                    import smbus2
-                    return (True, None)
-                except ImportError:
-                    return (False, "smbus2 package not installed")
-
-            def setup(self) -> None:
-                # Initialize hardware connection
-                pass
-
-            def teardown(self) -> None:
-                # Cleanup resources
-                pass
-
-            # ... implement ReadingProvider methods
+    Provides the common interface that all plugins (read, write, readwrite)
+    must implement: metadata, dependency checking, configuration validation,
+    and setup/teardown lifecycle.
     """
 
     @property
     @abstractmethod
     def metadata(self) -> PluginMetadata:
-        """Plugin metadata including name, version, and dependencies.
-
-        Returns:
-            PluginMetadata instance with plugin information.
-        """
+        """Plugin metadata including name, version, and dependencies."""
         pass
 
     @abstractmethod
@@ -115,16 +78,6 @@ class SensorPlugin(ReadingProvider):
 
         Returns:
             JSON Schema dict describing expected config structure.
-
-        Example:
-            {
-                "type": "object",
-                "properties": {
-                    "bus": {"type": "integer", "minimum": 0},
-                    "address": {"type": "integer"}
-                },
-                "required": ["bus", "address"]
-            }
         """
         pass
 
@@ -139,157 +92,154 @@ class SensorPlugin(ReadingProvider):
             Tuple of (success, error_message).
             - (True, None) if all dependencies met
             - (False, "reason") if dependencies missing
-
-        Example:
-            def check_dependencies(self) -> tuple[bool, str | None]:
-                try:
-                    import gpiozero
-                    import RPi.GPIO
-                    return (True, None)
-                except ImportError as e:
-                    return (False, f"Missing dependency: {e.name}")
         """
         pass
 
 
-class ToolPlugin(Tool):
-    """Extended interface for pluggable tools.
+class ObservationHook:
+    """Optional mixin for plugins that participate in the observation cycle.
 
-    Tool plugins extend Tool with lifecycle hooks, dependency checking,
-    and config validation. A single ToolPlugin can provide multiple tools.
+    Inherit this alongside ReadPlugin, WritePlugin, or ReadWritePlugin to
+    receive callbacks at the start and end of each observation cycle.
+    Both methods have default no-op implementations — only override what you need.
+    """
+
+    async def on_observation_begin(self) -> None:
+        """Called at the start of each observation cycle, before readings are taken."""
+
+    async def on_observation_end(self, success: bool) -> None:
+        """Called at the end of each observation cycle.
+
+        Args:
+            success: True if the cycle completed normally; False if an exception occurred.
+        """
+
+
+class ReadPlugin(PluginLifecycleMixin, ReadingProvider):
+    """Plugin that ingests data into smollama.
+
+    Read plugins extend ReadingProvider with lifecycle hooks,
+    dependency checking, and config validation. They provide
+    sensor data, API responses, or any other input to the system.
 
     Example:
-        class MyAPIPlugin(ToolPlugin):
+        class MyTemperatureSensor(ReadPlugin):
             @property
-            def name(self) -> str:
-                return "call_api"
+            def source_type(self) -> str:
+                return "i2c_temp"
 
             @property
             def metadata(self) -> PluginMetadata:
                 return PluginMetadata(
-                    name="api_tools",
+                    name="i2c_temp",
                     version="1.0.0",
                     author="Your Name",
-                    description="API integration tools",
-                    dependencies=["httpx>=0.25.0"],
-                    plugin_type="tool"
+                    description="I2C temperature sensor",
+                    dependencies=["smbus2>=0.4.0"],
+                    plugin_type="read"
                 )
 
             def check_dependencies(self) -> tuple[bool, str | None]:
                 try:
-                    import httpx
+                    import smbus2
                     return (True, None)
                 except ImportError:
-                    return (False, "httpx package not installed")
+                    return (False, "smbus2 package not installed")
 
             def setup(self) -> None:
-                # Initialize API client
                 pass
 
             def teardown(self) -> None:
-                # Cleanup connections
+                pass
+
+            # ... implement ReadingProvider methods
+    """
+    pass
+
+
+class WritePlugin(PluginLifecycleMixin, Tool):
+    """Plugin that takes actions on the world.
+
+    Write plugins extend Tool with lifecycle hooks, dependency checking,
+    and config validation. They control hardware (displays, actuators),
+    send API requests, or perform any output action.
+
+    A single WritePlugin can provide multiple tools.
+
+    Example:
+        class MyDisplayPlugin(WritePlugin):
+            @property
+            def name(self) -> str:
+                return "display_value"
+
+            @property
+            def metadata(self) -> PluginMetadata:
+                return PluginMetadata(
+                    name="led_display",
+                    version="1.0.0",
+                    author="Your Name",
+                    description="LED display controller",
+                    dependencies=["RPi.GPIO>=0.7"],
+                    plugin_type="write"
+                )
+
+            def check_dependencies(self) -> tuple[bool, str | None]:
+                try:
+                    import RPi.GPIO
+                    return (True, None)
+                except ImportError:
+                    return (False, "RPi.GPIO not installed")
+
+            def setup(self) -> None:
+                pass
+
+            def teardown(self) -> None:
                 pass
 
             def get_tools(self) -> list[Tool]:
-                # Return list of Tool instances this plugin provides
                 return [self]
 
             # ... implement Tool methods
     """
-
-    @property
-    @abstractmethod
-    def metadata(self) -> PluginMetadata:
-        """Plugin metadata including name, version, and dependencies.
-
-        Returns:
-            PluginMetadata instance with plugin information.
-        """
-        pass
-
-    @abstractmethod
-    def setup(self) -> None:
-        """Called once when the plugin is loaded.
-
-        Use this to initialize connections, allocate resources,
-        or perform one-time setup tasks.
-
-        Raises:
-            Exception: If setup fails, plugin will be marked as failed.
-        """
-        pass
-
-    @abstractmethod
-    def teardown(self) -> None:
-        """Called once when the plugin is unloaded or app shuts down.
-
-        Use this to cleanup resources, close connections, or perform
-        shutdown tasks. This is always called for successfully initialized
-        plugins, even if other plugins fail.
-
-        Note:
-            Exceptions in teardown are logged but don't prevent other
-            plugins from being cleaned up.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def config_schema(self) -> dict[str, Any]:
-        """JSON Schema for plugin-specific configuration validation.
-
-        Returns:
-            JSON Schema dict describing expected config structure.
-
-        Example:
-            {
-                "type": "object",
-                "properties": {
-                    "api_key": {"type": "string"},
-                    "base_url": {"type": "string", "format": "uri"}
-                },
-                "required": ["api_key"]
-            }
-        """
-        pass
-
-    @abstractmethod
-    def check_dependencies(self) -> tuple[bool, str | None]:
-        """Check if plugin dependencies are available.
-
-        Called before setup() to verify runtime requirements.
-        Plugins with unmet dependencies are skipped gracefully.
-
-        Returns:
-            Tuple of (success, error_message).
-            - (True, None) if all dependencies met
-            - (False, "reason") if dependencies missing
-
-        Example:
-            def check_dependencies(self) -> tuple[bool, str | None]:
-                try:
-                    import httpx
-                    return (True, None)
-                except ImportError as e:
-                    return (False, f"Missing dependency: {e.name}")
-        """
-        pass
 
     def get_tools(self) -> list[Tool]:
         """Get list of tools provided by this plugin.
 
         Override this if your plugin provides multiple tools.
         Default implementation returns [self].
-
-        Returns:
-            List of Tool instances this plugin provides.
-
-        Example:
-            def get_tools(self) -> list[Tool]:
-                return [
-                    GetTool(self.config),
-                    PostTool(self.config),
-                    DeleteTool(self.config)
-                ]
         """
         return [self]
+
+
+class ReadWritePlugin(PluginLifecycleMixin, ReadingProvider, Tool):
+    """Hybrid plugin that both reads data and performs actions.
+
+    ReadWrite plugins combine the ReadingProvider and Tool interfaces,
+    allowing a single plugin to both ingest data and take actions.
+    Useful for components like relays (toggle on/off AND read current state).
+
+    Example:
+        class RelayPlugin(ReadWritePlugin):
+            @property
+            def source_type(self) -> str:
+                return "relay"
+
+            @property
+            def name(self) -> str:
+                return "toggle_relay"
+
+            # ... implement both ReadingProvider and Tool methods
+    """
+
+    def get_tools(self) -> list[Tool]:
+        """Get list of tools provided by this plugin.
+
+        Override this if your plugin provides multiple tools.
+        Default implementation returns [self].
+        """
+        return [self]
+
+
+# Backwards compatibility aliases
+SensorPlugin = ReadPlugin
+ToolPlugin = WritePlugin

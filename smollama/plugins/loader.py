@@ -8,8 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from smollama.plugins.base import PluginMetadata, SensorPlugin, ToolPlugin
+from smollama.plugins.base import (
+    PluginLifecycleMixin,
+    PluginMetadata,
+    ReadPlugin,
+    ReadWritePlugin,
+    WritePlugin,
+)
 from smollama.plugins.config import validate_plugin_config
+from smollama.readings.base import ReadingProvider
+from smollama.tools.base import Tool
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +26,7 @@ logger = logging.getLogger(__name__)
 class DiscoveredPlugin:
     """Information about a discovered plugin."""
 
-    plugin_class: type[SensorPlugin] | type[ToolPlugin]
+    plugin_class: type[ReadPlugin] | type[WritePlugin] | type[ReadWritePlugin]
     """The plugin class itself"""
 
     metadata: PluginMetadata
@@ -35,7 +43,7 @@ class DiscoveredPlugin:
 class PluginLoadResult:
     """Result of attempting to load a plugin."""
 
-    plugin: SensorPlugin | ToolPlugin | None
+    plugin: ReadPlugin | WritePlugin | ReadWritePlugin | None
     """The loaded plugin instance, or None if loading failed"""
 
     success: bool
@@ -59,7 +67,7 @@ class PluginLoader:
         """
         self._additional_paths = additional_paths or []
         self._discovered_plugins: list[DiscoveredPlugin] = []
-        self._loaded_plugins: dict[str, SensorPlugin | ToolPlugin] = {}
+        self._loaded_plugins: dict[str, ReadPlugin | WritePlugin | ReadWritePlugin] = {}
         self._failed_plugins: dict[str, str] = {}
         self._skipped_plugins: dict[str, str] = {}
 
@@ -67,7 +75,7 @@ class PluginLoader:
         """Discover all available plugins.
 
         Scans the builtin plugins directory and any additional paths
-        for SensorPlugin and ToolPlugin subclasses.
+        for ReadPlugin, WritePlugin, and ReadWritePlugin subclasses.
 
         Returns:
             List of discovered plugins with their metadata.
@@ -166,20 +174,26 @@ class PluginLoader:
             module_name: Fully qualified module name.
         """
         for name, obj in inspect.getmembers(module, inspect.isclass):
-            # Check if it's a SensorPlugin or ToolPlugin subclass
-            # (but not the base classes themselves)
-            is_sensor = (
-                issubclass(obj, SensorPlugin)
-                and obj is not SensorPlugin
+            # Check ReadWritePlugin first (it's a subclass of both Read and Write)
+            is_readwrite = (
+                issubclass(obj, ReadWritePlugin)
+                and obj is not ReadWritePlugin
                 and not inspect.isabstract(obj)
             )
-            is_tool = (
-                issubclass(obj, ToolPlugin)
-                and obj is not ToolPlugin
+            is_read = (
+                issubclass(obj, ReadPlugin)
+                and obj is not ReadPlugin
                 and not inspect.isabstract(obj)
+                and not is_readwrite
+            )
+            is_write = (
+                issubclass(obj, WritePlugin)
+                and obj is not WritePlugin
+                and not inspect.isabstract(obj)
+                and not is_readwrite
             )
 
-            if not (is_sensor or is_tool):
+            if not (is_read or is_write or is_readwrite):
                 continue
 
             # Validate plugin has required methods/properties
@@ -267,6 +281,10 @@ class PluginLoader:
                         plugin=None, success=False, error=config_error
                     )
 
+            # Inject config before setup so setup() can access self._config
+            if config is not None and hasattr(plugin, "_config"):
+                plugin._config = config
+
             # Initialize the plugin
             plugin.setup()
 
@@ -300,13 +318,16 @@ class PluginLoader:
 
         for discovered in self._discovered_plugins:
             plugin_name = discovered.metadata.name
-            config = plugin_configs.get(plugin_name)
+            if plugin_name not in plugin_configs:
+                logger.debug(f"Skipping plugin {plugin_name}: not enabled in config")
+                continue
+            config = plugin_configs[plugin_name]
             result = self.load_plugin(discovered, config)
             results.append(result)
 
         return results
 
-    def get_loaded_plugins(self) -> list[SensorPlugin | ToolPlugin]:
+    def get_loaded_plugins(self) -> list[ReadPlugin | WritePlugin | ReadWritePlugin]:
         """Get all successfully loaded plugins.
 
         Returns:
@@ -314,25 +335,36 @@ class PluginLoader:
         """
         return list(self._loaded_plugins.values())
 
-    def get_sensor_plugins(self) -> list[SensorPlugin]:
-        """Get all loaded sensor plugins.
+    def get_read_plugins(self) -> list[ReadPlugin | ReadWritePlugin]:
+        """Get all plugins that provide readings (ReadPlugin + ReadWritePlugin).
 
         Returns:
-            List of loaded SensorPlugin instances.
+            List of plugins that implement ReadingProvider.
         """
         return [
-            p for p in self._loaded_plugins.values() if isinstance(p, SensorPlugin)
+            p for p in self._loaded_plugins.values()
+            if isinstance(p, ReadingProvider) and isinstance(p, PluginLifecycleMixin)
         ]
 
-    def get_tool_plugins(self) -> list[ToolPlugin]:
-        """Get all loaded tool plugins.
+    def get_write_plugins(self) -> list[WritePlugin | ReadWritePlugin]:
+        """Get all plugins that provide tools (WritePlugin + ReadWritePlugin).
 
         Returns:
-            List of loaded ToolPlugin instances.
+            List of plugins that implement Tool.
         """
         return [
-            p for p in self._loaded_plugins.values() if isinstance(p, ToolPlugin)
+            p for p in self._loaded_plugins.values()
+            if isinstance(p, Tool) and isinstance(p, PluginLifecycleMixin)
         ]
+
+    # Backwards compatibility aliases
+    def get_sensor_plugins(self) -> list[ReadPlugin | ReadWritePlugin]:
+        """Get all loaded sensor/read plugins. Alias for get_read_plugins()."""
+        return self.get_read_plugins()
+
+    def get_tool_plugins(self) -> list[WritePlugin | ReadWritePlugin]:
+        """Get all loaded tool/write plugins. Alias for get_write_plugins()."""
+        return self.get_write_plugins()
 
     def shutdown_plugins(self) -> None:
         """Shutdown all loaded plugins.

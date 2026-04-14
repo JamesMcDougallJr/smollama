@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<wiring component="lcd-1602a-i2c" board="raspberry-pi">
+  <!--
+    QAPASS 1602A with PCF8574 I2C backpack module.
+    Only 4 wires needed — I2C handles all data via SDA/SCL.
+
+    Enable I2C first: raspi-config → Interface Options → I2C → Enable
+    Verify address:   i2cdetect -y 1  (look for 0x27 or 0x3F)
+  -->
+
+  <connection signal="vcc" to="5V" header="2">
+    <via type="direct" />
+    <note>5V supply for LCD + backpack logic. Do NOT use 3.3V — display won't initialise.</note>
+  </connection>
+
+  <connection signal="gnd" to="GND" header="6">
+    <via type="direct" />
+  </connection>
+
+  <connection signal="sda" bcm="2" header="3">
+    <via type="direct" />
+    <note>Pi has built-in 1.8kΩ pull-ups on BCM2/3 — no external resistors needed.</note>
+  </connection>
+
+  <connection signal="scl" bcm="3" header="5">
+    <via type="direct" />
+  </connection>
+
+  <!--
+    PCF8574 I2C addresses (set by A0/A1/A2 solder jumpers on backpack):
+      PCF8574  — 0x20 to 0x27 (default: all jumpers open = 0x27)
+      PCF8574A — 0x38 to 0x3F (default: all jumpers open = 0x3F)
+
+    Contrast adjustment:
+      Turn the blue trimmer potentiometer on the backpack until characters appear.
+      Fully CCW = maximum contrast (black blocks), fully CW = no visible text.
+  -->
+
+  <!--
+    Smollama plugin config:
+    plugins:
+      builtin:
+        lcd1602:
+          enabled: true
+          config:
+            i2c_address: 0x27
+            i2c_port: 1
+  -->
+</wiring>

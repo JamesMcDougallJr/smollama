@@ -1,7 +1,7 @@
 """FastAPI web dashboard application."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -102,17 +102,22 @@ def create_app(
         return templates.TemplateResponse("readings.html", context)
 
     @app.get("/observations", response_class=HTMLResponse)
-    async def observations_page(request: Request):
+    async def observations_page(request: Request, hours: int = 0, query: str = ""):
         """Observation history page."""
+        from_ts = None
+        if hours > 0:
+            from_ts = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
         context = {
             "request": request,
             "node_name": config.node.name,
             "page": "observations",
+            "query": query,
+            "hours": hours,
         }
 
         if store:
-            # Get recent observations (search with empty query returns all)
-            context["observations"] = store.search_observations("", limit=50)
+            context["observations"] = store.search_observations("", limit=50, from_ts=from_ts)
 
         return templates.TemplateResponse("observations.html", context)
 
@@ -161,19 +166,26 @@ def create_app(
         query: str = "",
         limit: int = 20,
         obs_type: str | None = None,
+        hours: int = 0,
     ) -> dict[str, Any]:
         """Search observations."""
         if not store:
             return JSONResponse({"error": "No memory store available", "observations": []}, status_code=503)
 
+        from_ts = None
+        if hours > 0:
+            from_ts = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
         observations = store.search_observations(
             query=query,
             limit=limit,
             observation_type=obs_type,
+            from_ts=from_ts,
         )
 
         return {
             "query": query,
+            "hours": hours,
             "count": len(observations),
             "observations": observations,
         }
@@ -276,11 +288,15 @@ def create_app(
         )
 
     @app.get("/htmx/observations", response_class=HTMLResponse)
-    async def htmx_observations(request: Request, query: str = ""):
+    async def htmx_observations(request: Request, query: str = "", hours: int = 0):
         """HTMX partial for observations list."""
+        from_ts = None
+        if hours > 0:
+            from_ts = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
         observations = []
         if store:
-            observations = store.search_observations(query, limit=20)
+            observations = store.search_observations(query, limit=50, from_ts=from_ts)
 
         return templates.TemplateResponse(
             "partials/observations_list.html",

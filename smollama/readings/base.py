@@ -169,10 +169,10 @@ class ReadingManager:
         if self._plugin_loader is None:
             return
 
-        # Get all loaded sensor plugins
-        sensor_plugins = self._plugin_loader.get_sensor_plugins()
+        # Get all loaded read plugins (ReadPlugin + ReadWritePlugin)
+        read_plugins = self._plugin_loader.get_read_plugins()
 
-        for plugin in sensor_plugins:
+        for plugin in read_plugins:
             self.register(plugin)
 
     def reload_plugins(self) -> None:

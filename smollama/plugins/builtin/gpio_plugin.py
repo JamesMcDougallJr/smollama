@@ -8,11 +8,11 @@ logger = logging.getLogger(__name__)
 
 from smollama.config import GPIOConfig
 from smollama.gpio_reader import GPIOReader
-from smollama.plugins.base import PluginMetadata, SensorPlugin
+from smollama.plugins.base import PluginMetadata, ReadPlugin
 from smollama.readings.base import Reading
 
 
-class GPIOSensorPlugin(SensorPlugin):
+class GPIOSensorPlugin(ReadPlugin):
     """Plugin providing GPIO pin readings on Raspberry Pi.
 
     This plugin wraps the existing GPIOReader to provide GPIO sensor
@@ -38,7 +38,7 @@ class GPIOSensorPlugin(SensorPlugin):
             author="Smollama Team",
             description="GPIO sensor plugin for Raspberry Pi",
             dependencies=["RPi.GPIO"],
-            plugin_type="sensor",
+            plugin_type="read",
         )
 
     @property

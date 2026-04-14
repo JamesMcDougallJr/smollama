@@ -4,7 +4,7 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3.2:1b"
+  model: "gemma4:e2b"
 
 mqtt:
   broker: "10.0.0.90"  # Mac's IP (MQTT broker)

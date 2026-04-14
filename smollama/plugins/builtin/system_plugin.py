@@ -3,11 +3,11 @@
 from datetime import datetime
 from typing import Any
 
-from smollama.plugins.base import PluginMetadata, SensorPlugin
+from smollama.plugins.base import PluginMetadata, ReadPlugin
 from smollama.readings.base import Reading
 
 
-class SystemSensorPlugin(SensorPlugin):
+class SystemSensorPlugin(ReadPlugin):
     """Plugin providing system metrics (CPU, memory, load).
 
     Uses /sys and /proc files directly, with no external dependencies.
@@ -25,7 +25,7 @@ class SystemSensorPlugin(SensorPlugin):
             author="Smollama Team",
             description="System metrics sensor plugin (CPU, memory, load)",
             dependencies=[],  # No external dependencies
-            plugin_type="sensor",
+            plugin_type="read",
         )
 
     @property

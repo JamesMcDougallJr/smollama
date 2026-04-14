@@ -1,11 +1,15 @@
-"""SH5461AS 4-digit 7-segment LED display plugin."""
+"""SH5461AS 4-digit 7-segment LED display plugin.
+
+Auto-detects Pi version and uses the appropriate GPIO backend
+(RPi.GPIO for Pi 4 and earlier, lgpio for Pi 5).
+"""
 
 import logging
 import threading
 import time
 from typing import Any
 
-from smollama.plugins.base import PluginMetadata, ToolPlugin
+from smollama.plugins.base import PluginMetadata, WritePlugin
 from smollama.tools.base import ToolParameter
 
 logger = logging.getLogger(__name__)
@@ -35,7 +39,7 @@ _SEGMENTS: dict[str, int] = {
     " ": 0b00000000,  # blank
 }
 
-# Order of segment GPIO pins: index matches bit position 0–7 (a, b, c, d, e, f, g, dp)
+# Order of segment GPIO pins: index matches bit position 0-7 (a, b, c, d, e, f, g, dp)
 _SEG_ORDER = ["a", "b", "c", "d", "e", "f", "g", "dp"]
 
 _DEFAULT_DIGIT_PINS = [17, 27, 22, 5]
@@ -46,7 +50,7 @@ def _parse_text(text: str) -> list[tuple[int, bool]]:
     """Convert a display string into a 4-slot buffer.
 
     Each slot is (segment_byte, show_dp). Handles decimal points embedded in
-    the string (e.g. "12.34" → 4 slots with dp on slot index 1).
+    the string (e.g. "12.34" -> 4 slots with dp on slot index 1).
 
     Returns exactly 4 slots, right-aligned, blank-padded on the left.
     """
@@ -69,33 +73,35 @@ def _parse_text(text: str) -> list[tuple[int, bool]]:
     return slots[:4]
 
 
-class SH5461ASPlugin(ToolPlugin):
-    """SH5461AS 4-digit 7-segment LED display plugin.
+class SH5461ASPlugin(WritePlugin):
+    """SH5461AS 4-digit 7-segment LED display write plugin.
 
     Exposes a ``display_value`` tool that lets the agent show up to 4
     characters on the physical display.  A background thread handles
     the multiplexing so the caller never blocks.
 
+    Auto-detects Pi version and uses RPi.GPIO (Pi 4) or lgpio (Pi 5).
+
     Wiring (default BCM pins):
-      D1 (leftmost) → BCM 17  (Pi Pin 11)   — direct
-      D2            → BCM 27  (Pi Pin 13)   — direct
-      D3            → BCM 22  (Pi Pin 15)   — direct
-      D4 (rightmost)→ BCM 5   (Pi Pin 29)   — direct
-      Seg a         → BCM 6   (Pi Pin 31)   — via 220Ω
-      Seg b         → BCM 13  (Pi Pin 33)   — via 220Ω
-      Seg c         → BCM 19  (Pi Pin 35)   — via 220Ω
-      Seg d         → BCM 26  (Pi Pin 37)   — via 220Ω
-      Seg e         → BCM 21  (Pi Pin 40)   — via 220Ω
-      Seg f         → BCM 20  (Pi Pin 38)   — via 220Ω
-      Seg g         → BCM 16  (Pi Pin 36)   — via 220Ω
-      Seg dp        → BCM 12  (Pi Pin 32)   — via 220Ω
+      D1 (leftmost) -> BCM 17  (Pi Pin 11)   -- direct
+      D2            -> BCM 27  (Pi Pin 13)   -- direct
+      D3            -> BCM 22  (Pi Pin 15)   -- direct
+      D4 (rightmost)-> BCM 5   (Pi Pin 29)   -- direct
+      Seg a         -> BCM 6   (Pi Pin 31)   -- via 220 ohm
+      Seg b         -> BCM 13  (Pi Pin 33)   -- via 220 ohm
+      Seg c         -> BCM 19  (Pi Pin 35)   -- via 220 ohm
+      Seg d         -> BCM 26  (Pi Pin 37)   -- via 220 ohm
+      Seg e         -> BCM 21  (Pi Pin 40)   -- via 220 ohm
+      Seg f         -> BCM 20  (Pi Pin 38)   -- via 220 ohm
+      Seg g         -> BCM 16  (Pi Pin 36)   -- via 220 ohm
+      Seg dp        -> BCM 12  (Pi Pin 32)   -- via 220 ohm
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         self._config: dict[str, Any] = config or {}
-        self._gpio: Any = None  # RPi.GPIO module, deferred import
+        self._backend: Any = None  # GPIOBackend instance, created in setup()
         self._digit_pins: list[int] = []
-        self._seg_pins: list[int] = []  # ordered a–dp
+        self._seg_pins: list[int] = []  # ordered a-dp
         self._buffer: list[tuple[int, bool]] = [(_SEGMENTS[" "], False)] * 4
         self._running = False
         self._thread: threading.Thread | None = None
@@ -108,11 +114,11 @@ class SH5461ASPlugin(ToolPlugin):
     def metadata(self) -> PluginMetadata:
         return PluginMetadata(
             name="sh5461as",
-            version="1.0.0",
+            version="2.0.0",
             author="Smollama Team",
-            description="SH5461AS 4-digit 7-segment LED display — exposes display_value tool",
-            dependencies=["RPi.GPIO>=0.7"],
-            plugin_type="tool",
+            description="SH5461AS 4-digit 7-segment LED display write plugin",
+            dependencies=[],
+            plugin_type="write",
         )
 
     @property
@@ -126,36 +132,40 @@ class SH5461ASPlugin(ToolPlugin):
                     "minItems": 4,
                     "maxItems": 4,
                     "default": _DEFAULT_DIGIT_PINS,
-                    "description": "BCM pins for D1–D4 (left to right)",
+                    "description": "BCM pins for D1-D4 (left to right)",
                 },
                 "segment_pins": {
                     "type": "object",
                     "properties": {seg: {"type": "integer"} for seg in _SEG_ORDER},
                     "default": _DEFAULT_SEGMENT_PINS,
-                    "description": "BCM pin for each segment (a–g + dp)",
+                    "description": "BCM pin for each segment (a-g + dp)",
                 },
             },
             "additionalProperties": False,
         }
 
     def check_dependencies(self) -> tuple[bool, str | None]:
-        from smollama.plugins.builtin.pi_platform import is_pi5
-        if is_pi5():
-            return (False, "Pi 5 detected — use SH5461ASPi5Plugin (lgpio) instead")
+        # Accept either GPIO library
+        try:
+            import lgpio  # noqa: F401
+            return (True, None)
+        except ImportError:
+            pass
         try:
             import RPi.GPIO  # noqa: F401
+            return (True, None)
         except ImportError:
-            return (False, "Missing package: RPi.GPIO")
-        return (True, None)
+            pass
+        return (False, "Missing GPIO library: install RPi.GPIO or lgpio")
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                             #
     # ------------------------------------------------------------------ #
 
     def setup(self) -> None:
-        import RPi.GPIO as GPIO
+        from smollama.plugins.builtin.gpio_backend import create_backend
 
-        self._gpio = GPIO
+        self._backend = create_backend()
 
         digit_pins = self._config.get("digit_pins", _DEFAULT_DIGIT_PINS)
         seg_map = self._config.get("segment_pins", _DEFAULT_SEGMENT_PINS)
@@ -164,16 +174,13 @@ class SH5461ASPlugin(ToolPlugin):
         self._seg_pins = [seg_map[s] for s in _SEG_ORDER]
         self._digit_pins = list(digit_pins)
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-
         # Digit pins: output, start LOW (digit off)
         for pin in self._digit_pins:
-            GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+            self._backend.setup_output(pin, 0)
 
-        # Segment pins: output, start HIGH (segment off — active-low)
+        # Segment pins: output, start HIGH (segment off -- active-low)
         for pin in self._seg_pins:
-            GPIO.setup(pin, GPIO.OUT, initial=GPIO.HIGH)
+            self._backend.setup_output(pin, 1)
 
         self._running = True
         self._thread = threading.Thread(target=self._mux_loop, daemon=True)
@@ -191,25 +198,25 @@ class SH5461ASPlugin(ToolPlugin):
             self._thread.join(timeout=1.0)
             self._thread = None
 
-        if self._gpio is not None:
+        if self._backend is not None:
             try:
                 # Turn everything off before cleanup
                 for pin in self._digit_pins:
-                    self._gpio.output(pin, self._gpio.LOW)
+                    self._backend.write(pin, 0)
                 for pin in self._seg_pins:
-                    self._gpio.output(pin, self._gpio.HIGH)
-                self._gpio.cleanup(self._digit_pins + self._seg_pins)
+                    self._backend.write(pin, 1)
+                self._backend.cleanup()
             except Exception as e:
                 logger.warning("Error during SH5461AS teardown: %s", e)
             finally:
-                self._gpio = None
+                self._backend = None
 
     # ------------------------------------------------------------------ #
     # Multiplexing loop (background thread)                                #
     # ------------------------------------------------------------------ #
 
     def _mux_loop(self) -> None:
-        GPIO = self._gpio
+        backend = self._backend
         digit_pins = self._digit_pins
         seg_pins = self._seg_pins
 
@@ -222,26 +229,29 @@ class SH5461ASPlugin(ToolPlugin):
                 seg_byte, show_dp = buf[i]
 
                 # All digits off
-                GPIO.output(digit_pins, GPIO.LOW)
+                for p in digit_pins:
+                    backend.write(p, 0)
 
-                # Write segments (active-low: segment ON → pin LOW)
-                for bit, s_pin in enumerate(seg_pins[:7]):  # a–g
+                # Write segments (active-low: segment ON -> pin LOW)
+                for bit in range(7):  # a-g
                     on = bool(seg_byte & (1 << bit))
-                    GPIO.output(s_pin, GPIO.LOW if on else GPIO.HIGH)
+                    backend.write(seg_pins[bit], 0 if on else 1)
 
                 # Decimal point
-                GPIO.output(seg_pins[7], GPIO.LOW if show_dp else GPIO.HIGH)
+                backend.write(seg_pins[7], 0 if show_dp else 1)
 
                 # Enable this digit
-                GPIO.output(d_pin, GPIO.HIGH)
+                backend.write(d_pin, 1)
 
                 time.sleep(0.001)
 
         # All off on exit
-        if self._gpio is not None:
+        if self._backend is not None:
             try:
-                GPIO.output(digit_pins, GPIO.LOW)
-                GPIO.output(seg_pins, GPIO.HIGH)
+                for p in digit_pins:
+                    backend.write(p, 0)
+                for p in seg_pins:
+                    backend.write(p, 1)
             except Exception:
                 pass
 
@@ -282,3 +292,7 @@ class SH5461ASPlugin(ToolPlugin):
         self._buffer = _parse_text(text)
         logger.debug("SH5461AS display updated: %r", text)
         return f"Displaying: {text!r}"
+
+
+# Backwards compatibility alias
+SH5461ASPi5Plugin = SH5461ASPlugin

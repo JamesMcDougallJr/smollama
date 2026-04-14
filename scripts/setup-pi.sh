@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Smollama Raspberry Pi Setup Script
+# Smollama Raspberry Pi Production Setup
 #
-# One-time configuration for Raspberry Pi production deployment.
-# Handles GPIO enablement, system dependencies, package installation,
-# systemd service creation, and log rotation.
+# One-time configuration for unattended Raspberry Pi deployment.
+# Runs install.sh for dependencies, then creates systemd service,
+# log rotation, and system-wide executable.
 #
 # Usage:
 #   sudo ./scripts/setup-pi.sh [OPTIONS]
@@ -128,14 +128,12 @@ verify_raspberry_pi() {
 
   local is_pi=false
 
-  # Check device-tree model (most reliable)
   if [[ -f /proc/device-tree/model ]]; then
     if grep -qi "raspberry pi" /proc/device-tree/model; then
       is_pi=true
     fi
   fi
 
-  # Fallback: check cpuinfo for BCM processor
   if [[ "$is_pi" == false ]] && [[ -f /proc/cpuinfo ]]; then
     if grep -qi "BCM" /proc/cpuinfo; then
       is_pi=true
@@ -146,121 +144,29 @@ verify_raspberry_pi() {
     error "This script must run on Raspberry Pi hardware"
   fi
 
-  local model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' || echo "Unknown Pi Model")
+  local model
+  model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' || echo "Unknown Pi Model")
   success "Detected: $model"
 }
 
 #
-# GPIO enablement
+# Delegate to install.sh for all dependency installation
 #
 
-enable_gpio() {
-  info "Enabling GPIO interfaces..."
+ensure_installed() {
+  info "Ensuring smollama and all dependencies are installed..."
 
-  if ! command -v raspi-config &> /dev/null; then
-    warn "raspi-config not found, skipping GPIO auto-configuration"
-    return 0
+  local install_script="$SCRIPT_DIR/install.sh"
+
+  if [[ ! -f "$install_script" ]]; then
+    error "install.sh not found at $install_script"
   fi
 
-  # Enable SPI
-  if raspi-config nonint get_spi | grep -q "1"; then
-    info "Enabling SPI interface..."
-    raspi-config nonint do_spi 0
-    success "SPI enabled"
-  else
-    success "SPI already enabled"
-  fi
+  # Run install.sh as the service user (not as root)
+  info "Running install.sh as $SERVICE_USER..."
+  sudo -u "$SERVICE_USER" bash "$install_script" --all
 
-  # Enable I2C
-  if raspi-config nonint get_i2c | grep -q "1"; then
-    info "Enabling I2C interface..."
-    raspi-config nonint do_i2c 0
-    success "I2C enabled"
-  else
-    success "I2C already enabled"
-  fi
-
-  # Add user to gpio group
-  if groups "$SERVICE_USER" | grep -qv gpio; then
-    info "Adding $SERVICE_USER to gpio group..."
-    usermod -a -G gpio "$SERVICE_USER"
-    success "User added to gpio group"
-    warn "User must log out and back in for group changes to take effect"
-  else
-    success "User already in gpio group"
-  fi
-}
-
-#
-# System dependencies
-#
-
-install_system_dependencies() {
-  info "Installing system dependencies..."
-
-  # Update package list
-  apt-get update -qq
-
-  # Core dependencies
-  local packages=(
-    python3
-    python3-pip
-    python3-venv
-    build-essential
-    libgpiod2
-    mosquitto
-    mosquitto-clients
-    curl
-    git
-  )
-
-  # Install packages
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${packages[@]}"
-
-  success "System dependencies installed"
-}
-
-#
-# UV and package installation
-#
-
-install_uv_and_packages() {
-  info "Installing UV package manager..."
-
-  # Install UV for the service user
-  if ! sudo -u "$SERVICE_USER" bash -c 'command -v uv &> /dev/null'; then
-    sudo -u "$SERVICE_USER" bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-    success "UV installed"
-  else
-    success "UV already installed"
-  fi
-
-  # Ensure UV is in PATH for subsequent commands
-  local uv_path="/home/$SERVICE_USER/.cargo/bin/uv"
-  if [[ ! -x "$uv_path" ]]; then
-    uv_path="uv"  # Fallback to system path
-  fi
-
-  info "Installing smollama packages (production mode)..."
-  cd "$PROJECT_ROOT"
-
-  # Production install with all extras including pi
-  # Note: Using non-editable install for production
-  sudo -u "$SERVICE_USER" bash -c "
-    export PATH=\"/home/$SERVICE_USER/.cargo/bin:\$PATH\"
-    cd '$PROJECT_ROOT'
-    if command -v uv &> /dev/null; then
-      uv venv --python python3
-      source .venv/bin/activate
-      uv pip install --extra all --extra pi .
-    else
-      python3 -m venv .venv
-      source .venv/bin/activate
-      pip install '.[all,pi]'
-    fi
-  "
-
-  success "Packages installed"
+  success "Installation complete"
 }
 
 #
@@ -273,48 +179,23 @@ install_system_executable() {
   local venv_smollama="$PROJECT_ROOT/.venv/bin/smollama"
   local system_smollama="/usr/local/bin/smollama"
 
-  if [[ ! -f "$venv_smollama" ]]; then
-    error "Smollama executable not found at $venv_smollama"
+  # Check multiple possible locations for the smollama executable
+  local smollama_path=""
+  if [[ -f "$venv_smollama" ]]; then
+    smollama_path="$venv_smollama"
+  elif sudo -u "$SERVICE_USER" bash -c 'command -v smollama' &>/dev/null; then
+    smollama_path=$(sudo -u "$SERVICE_USER" bash -c 'command -v smollama')
   fi
 
-  # Create symlink
-  ln -sf "$venv_smollama" "$system_smollama"
-  success "Installed smollama to $system_smollama"
-
-  # Verify installation
-  if command -v smollama &> /dev/null; then
-    local version=$(sudo -u "$SERVICE_USER" smollama --version 2>&1 || echo "unknown")
-    success "Command verified: smollama ($version)"
-  else
-    warn "Smollama command not found in PATH after installation"
-  fi
-}
-
-#
-# Configuration setup
-#
-
-setup_configuration() {
-  info "Setting up configuration..."
-
-  local config_file="$PROJECT_ROOT/config.yaml"
-  local example_config="$PROJECT_ROOT/config.example.yaml"
-
-  if [[ -f "$config_file" ]]; then
-    success "Configuration file already exists"
+  if [[ -z "$smollama_path" ]]; then
+    warn "Smollama executable not found — skipping system-wide symlink"
+    warn "The service will use 'uv run smollama' or 'python3 -m smollama' instead"
     return 0
   fi
 
-  if [[ ! -f "$example_config" ]]; then
-    warn "Example config not found, skipping"
-    return 1
-  fi
-
-  # Copy and set ownership
-  cp "$example_config" "$config_file"
-  chown "$SERVICE_USER:$SERVICE_USER" "$config_file"
-  success "Created config.yaml from template"
-  echo "    Edit $config_file to customize settings"
+  # Create symlink
+  ln -sf "$smollama_path" "$system_smollama"
+  success "Installed smollama to $system_smollama -> $smollama_path"
 }
 
 #
@@ -324,7 +205,6 @@ setup_configuration() {
 create_systemd_service() {
   info "Creating systemd service..."
 
-  # Create service file
   cat > "$SYSTEMD_SERVICE_FILE" <<EOF
 [Unit]
 Description=Smollama - Distributed LLM coordination system
@@ -335,9 +215,9 @@ Wants=ollama.service mosquitto.service
 Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$PROJECT_ROOT
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/$SERVICE_USER/.cargo/bin"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/$SERVICE_USER/.cargo/bin:/home/$SERVICE_USER/.local/bin"
 Environment="PYTHONUNBUFFERED=1"
-ExecStart=/usr/local/bin/smollama run
+ExecStart=$PROJECT_ROOT/scripts/start.sh
 Restart=on-failure
 RestartSec=10s
 StandardOutput=journal
@@ -402,10 +282,8 @@ EOF
   # Configure journald retention (Pi-friendly limits)
   local journald_conf="/etc/systemd/journald.conf"
   if [[ -f "$journald_conf" ]]; then
-    # Create drop-in directory
     mkdir -p /etc/systemd/journald.conf.d
 
-    # Pi-friendly journal limits
     cat > /etc/systemd/journald.conf.d/smollama.conf <<EOF
 [Journal]
 SystemMaxUse=500M
@@ -415,7 +293,6 @@ EOF
 
     success "Journald retention configured (500MB, 30 days)"
 
-    # Restart journald to apply changes
     systemctl restart systemd-journald || warn "Could not restart journald"
   fi
 }
@@ -432,21 +309,18 @@ start_service() {
 
   info "Starting $SERVICE_NAME service..."
 
-  # Ensure dependencies are running
-  for dep in mosquitto; do
-    if systemctl is-active --quiet "$dep" 2>/dev/null; then
-      success "$dep is running"
-    else
-      info "Starting $dep..."
-      systemctl start "$dep" || warn "Could not start $dep"
-    fi
-  done
+  # Ensure Mosquitto is running
+  if systemctl is-active --quiet mosquitto 2>/dev/null; then
+    success "Mosquitto is running"
+  else
+    info "Starting Mosquitto..."
+    systemctl start mosquitto || warn "Could not start Mosquitto"
+  fi
 
   # Start our service
   if systemctl start "$SERVICE_NAME"; then
     success "Service started successfully"
 
-    # Wait a moment and check status
     sleep 2
     if systemctl is-active --quiet "$SERVICE_NAME"; then
       success "Service is running"
@@ -465,12 +339,12 @@ start_service() {
 show_network_info() {
   info "Network information..."
 
-  # Get IP addresses
-  local ip_addresses=$(hostname -I 2>/dev/null | xargs)
+  local ip_addresses
+  ip_addresses=$(hostname -I 2>/dev/null | xargs)
   if [[ -n "$ip_addresses" ]]; then
     success "IP addresses: $ip_addresses"
     echo
-    echo "    Access dashboard at: http://$(echo $ip_addresses | awk '{print $1}'):8000"
+    echo "    Dashboard: http://$(echo $ip_addresses | awk '{print $1}'):8080"
   else
     warn "Could not determine IP address"
   fi
@@ -488,7 +362,7 @@ show_next_steps() {
   echo
 
   if [[ "$START_SERVICE" == true ]]; then
-    echo "Service is running!"
+    echo "Service is running! (agent + dashboard)"
     echo
   fi
 
@@ -516,11 +390,6 @@ show_next_steps() {
   echo "  Service file: ${COLOR_BLUE}$SYSTEMD_SERVICE_FILE${COLOR_RESET}"
   echo "  Log directory: ${COLOR_BLUE}$LOG_DIR${COLOR_RESET}"
   echo
-
-  if groups "$SERVICE_USER" | grep -q gpio; then
-    echo -e "${COLOR_YELLOW}Note: GPIO group changes require logout/login to take effect${COLOR_RESET}"
-    echo
-  fi
 }
 
 #
@@ -529,7 +398,7 @@ show_next_steps() {
 
 main() {
   echo -e "${COLOR_BLUE}╔═══════════════════════════════════════════════════════╗${COLOR_RESET}"
-  echo -e "${COLOR_BLUE}║      Smollama Raspberry Pi Setup Script              ║${COLOR_RESET}"
+  echo -e "${COLOR_BLUE}║      Smollama Raspberry Pi Production Setup          ║${COLOR_RESET}"
   echo -e "${COLOR_BLUE}╚═══════════════════════════════════════════════════════╝${COLOR_RESET}"
   echo
 
@@ -541,24 +410,12 @@ main() {
   verify_raspberry_pi
   echo
 
-  # System configuration
-  enable_gpio
-  echo
-
-  # Install dependencies
-  install_system_dependencies
-  echo
-
-  # Install UV and packages
-  install_uv_and_packages
+  # Run install.sh for all dependency installation
+  ensure_installed
   echo
 
   # Install system-wide command
   install_system_executable
-  echo
-
-  # Setup configuration
-  setup_configuration
   echo
 
   # Create systemd service

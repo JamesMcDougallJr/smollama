@@ -10,8 +10,27 @@
         <p class="mt-2 text-gray-400">LLM-generated insights and detected patterns</p>
     </div>
 
-    <!-- Search -->
-    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+    <!-- Filters -->
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+        <!-- Time scrubber -->
+        <div id="filter-form" class="flex items-center gap-2 flex-wrap">
+            <span class="text-sm text-gray-400 mr-1">Show:</span>
+            {% for label, value in [('All', 0), ('7d', 168), ('24h', 24), ('6h', 6), ('1h', 1)] %}
+            <button type="button"
+                    data-hours="{{ value }}"
+                    hx-get="/htmx/observations"
+                    hx-target="#observations-list"
+                    hx-include="#filter-form"
+                    hx-push-url="true"
+                    class="time-preset px-3 py-1 rounded-full text-sm font-medium border transition-colors
+                           {% if hours == value %}bg-blue-600 border-blue-500 text-white
+                           {% else %}bg-gray-700 border-gray-600 text-gray-300 hover:border-blue-500 hover:text-white{% endif %}">
+                {{ label }}
+            </button>
+            {% endfor %}
+            <input type="hidden" id="hours-input" name="hours" value="{{ hours }}">
+        </div>
+        <!-- Search -->
         <input type="text"
                id="search-input"
                name="query"
@@ -20,29 +39,45 @@
                hx-get="/htmx/observations"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#observations-list"
-               hx-include="this"
+               hx-include="#filter-form"
                hx-push-url="true"
                class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
 
     <script>
-        // Sync search input with URL query parameter
         document.addEventListener('DOMContentLoaded', function() {
             const searchInput = document.getElementById('search-input');
+            const hoursInput = document.getElementById('hours-input');
+            const presets = document.querySelectorAll('.time-preset');
 
-            // Update URL when input changes
-            searchInput.addEventListener('input', function() {
-                const query = searchInput.value.trim();
+            function syncUrl() {
                 const url = new URL(window.location);
-
-                if (query) {
-                    url.searchParams.set('query', query);
-                } else {
-                    url.searchParams.delete('query');
-                }
-
+                const query = searchInput.value.trim();
+                const hours = hoursInput.value;
+                query ? url.searchParams.set('query', query) : url.searchParams.delete('query');
+                hours !== '0' ? url.searchParams.set('hours', hours) : url.searchParams.delete('hours');
                 window.history.pushState({}, '', url);
+            }
+
+            // Preset buttons: update hidden input, toggle active styles, then HTMX fires
+            presets.forEach(btn => {
+                btn.addEventListener('htmx:beforeRequest', function() {
+                    const val = this.dataset.hours;
+                    hoursInput.value = val;
+                    presets.forEach(b => {
+                        const active = b.dataset.hours === val;
+                        b.classList.toggle('bg-blue-600', active);
+                        b.classList.toggle('border-blue-500', active);
+                        b.classList.toggle('text-white', active);
+                        b.classList.toggle('bg-gray-700', !active);
+                        b.classList.toggle('border-gray-600', !active);
+                        b.classList.toggle('text-gray-300', !active);
+                    });
+                    syncUrl();
+                });
             });
+
+            searchInput.addEventListener('input', syncUrl);
         });
     </script>
 

@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 #
-# Smollama Service Startup Script
+# Smollama Startup Script
 #
-# Ensures Ollama and MQTT services are running before starting smollama.
-# Auto-starts missing services and handles cleanup on exit.
+# Starts all smollama services: Mosquitto, Ollama, agent, and dashboard.
+# Auto-starts missing dependencies and handles cleanup on exit.
 #
 # Usage:
-#   ./scripts/start.sh [SMOLLAMA_OPTIONS]
+#   ./scripts/start.sh [OPTIONS] [-- AGENT_OPTIONS]
 #
 # Options:
-#   All options are passed directly to 'smollama run'
+#   --no-dashboard       Skip starting the dashboard
+#   --dashboard-port P   Dashboard port (default: 8080)
+#   --help, -h           Show this help message
 #
 # Examples:
-#   ./scripts/start.sh                  # Start with default settings
-#   ./scripts/start.sh -v               # Start with verbose logging
-#   ./scripts/start.sh --host 0.0.0.0   # Start and bind to all interfaces
-#   ./scripts/start.sh --log-level debug --json  # Debug mode with JSON output
+#   ./scripts/start.sh                        # Start everything
+#   ./scripts/start.sh --no-dashboard         # Agent only
+#   ./scripts/start.sh --dashboard-port 9090  # Custom dashboard port
+#   ./scripts/start.sh -- -v --skip-preflight # Pass options to agent
 #
 
 set -euo pipefail
@@ -26,12 +28,20 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OLLAMA_PORT="11434"
 MQTT_PORT="1883"
 TMP_DIR="/tmp/smollama-start-$$"
+PID_FILE="/tmp/smollama-agent.pid"
 
-# Track PIDs of services we start
+# Options
+START_DASHBOARD=true
+DASHBOARD_PORT=8080
+AGENT_ARGS=()
+
+# Track PIDs of services/processes we start
 STARTED_OLLAMA=false
 STARTED_MOSQUITTO=false
 OLLAMA_PID=""
 MOSQUITTO_PID=""
+AGENT_PID=""
+DASHBOARD_PID=""
 
 # Colors for output
 if [[ -t 1 ]]; then
@@ -79,15 +89,66 @@ show_help() {
 }
 
 #
+# Argument parsing
+#
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --no-dashboard)
+        START_DASHBOARD=false
+        shift
+        ;;
+      --dashboard-port)
+        DASHBOARD_PORT="$2"
+        shift 2
+        ;;
+      --help|-h)
+        show_help
+        ;;
+      --)
+        shift
+        AGENT_ARGS=("$@")
+        break
+        ;;
+      *)
+        # Treat unknown args as agent args
+        AGENT_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+#
 # Cleanup handler
 #
 
 cleanup() {
   local exit_code=$?
 
-  info "Cleaning up..."
+  info "Shutting down..."
 
-  # Only stop services that we started
+  # Kill smollama processes we started
+  for pid_name in DASHBOARD_PID AGENT_PID; do
+    local pid="${!pid_name}"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      info "Stopping ${pid_name//_/ } (PID: $pid)..."
+      kill "$pid" 2>/dev/null || true
+      # Give it a moment to exit gracefully
+      local wait_count=0
+      while kill -0 "$pid" 2>/dev/null && [[ $wait_count -lt 5 ]]; do
+        sleep 1
+        ((wait_count++))
+      done
+      # Force kill if still running
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  # Only stop services that we started manually
   if [[ "$STARTED_OLLAMA" == true ]] && [[ -n "$OLLAMA_PID" ]]; then
     if kill -0 "$OLLAMA_PID" 2>/dev/null; then
       info "Stopping Ollama (PID: $OLLAMA_PID)..."
@@ -159,7 +220,8 @@ detect_init_system() {
 #
 
 start_ollama() {
-  local init_system=$(detect_init_system)
+  local init_system
+  init_system=$(detect_init_system)
 
   info "Starting Ollama service..."
 
@@ -170,10 +232,8 @@ start_ollama() {
         return 0
       fi
 
-      # Try to start via systemd
       if sudo systemctl start ollama 2>/dev/null; then
         success "Started Ollama via systemd"
-        # Don't set STARTED_OLLAMA=true because systemd manages it
         return 0
       else
         warn "Could not start Ollama via systemd, trying manual start"
@@ -186,10 +246,8 @@ start_ollama() {
         return 0
       fi
 
-      # Try to start via brew services
       if brew services start ollama 2>/dev/null; then
         success "Started Ollama via brew services"
-        # Don't set STARTED_OLLAMA=true because brew manages it
         return 0
       else
         warn "Could not start Ollama via brew services, trying manual start"
@@ -199,13 +257,12 @@ start_ollama() {
 
   # Manual start fallback
   if ! command -v ollama &> /dev/null; then
-    error "Ollama not installed. Install with: ./scripts/install.sh"
+    error "Ollama not installed. Run: ./scripts/install.sh"
   fi
 
   mkdir -p "$TMP_DIR"
   info "Starting Ollama manually..."
 
-  # Start Ollama in background
   nohup ollama serve > "$TMP_DIR/ollama.log" 2>&1 &
   OLLAMA_PID=$!
   STARTED_OLLAMA=true
@@ -235,7 +292,8 @@ wait_for_ollama() {
 #
 
 start_mosquitto() {
-  local init_system=$(detect_init_system)
+  local init_system
+  init_system=$(detect_init_system)
 
   info "Starting Mosquitto service..."
 
@@ -246,10 +304,8 @@ start_mosquitto() {
         return 0
       fi
 
-      # Try to start via systemd
       if sudo systemctl start mosquitto 2>/dev/null; then
         success "Started Mosquitto via systemd"
-        # Don't set STARTED_MOSQUITTO=true because systemd manages it
         return 0
       else
         warn "Could not start Mosquitto via systemd, trying manual start"
@@ -262,10 +318,8 @@ start_mosquitto() {
         return 0
       fi
 
-      # Try to start via brew services
       if brew services start mosquitto 2>/dev/null; then
         success "Started Mosquitto via brew services"
-        # Don't set STARTED_MOSQUITTO=true because brew manages it
         return 0
       else
         warn "Could not start Mosquitto via brew services, trying manual start"
@@ -275,13 +329,12 @@ start_mosquitto() {
 
   # Manual start fallback
   if ! command -v mosquitto &> /dev/null; then
-    error "Mosquitto not installed. Install with: ./scripts/install.sh"
+    error "Mosquitto not installed. Run: ./scripts/install.sh"
   fi
 
   mkdir -p "$TMP_DIR"
   info "Starting Mosquitto manually..."
 
-  # Start Mosquitto in background (daemon mode)
   mosquitto -d -p "$MQTT_PORT" > "$TMP_DIR/mosquitto.log" 2>&1 &
   MOSQUITTO_PID=$!
   STARTED_MOSQUITTO=true
@@ -307,26 +360,16 @@ wait_for_mosquitto() {
 }
 
 #
-# Service verification
+# Smollama command resolution
 #
 
-verify_services() {
-  info "Verifying smollama connectivity..."
-
-  cd "$PROJECT_ROOT"
-
-  # Run smollama status to verify all connections
+resolve_smollama_cmd() {
   if command -v smollama &> /dev/null; then
-    if smollama status &> /dev/null; then
-      success "All services are accessible"
-      return 0
-    else
-      warn "Some services may not be accessible. Check with: smollama status"
-      return 1
-    fi
+    echo "smollama"
+  elif command -v uv &> /dev/null && [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+    echo "uv run --project $PROJECT_ROOT smollama"
   else
-    warn "Smollama command not found. Run: ./scripts/install.sh"
-    return 1
+    echo "python3 -m smollama"
   fi
 }
 
@@ -342,18 +385,17 @@ main() {
     fi
   done
 
+  parse_args "$@"
+
   echo -e "${COLOR_BLUE}╔═══════════════════════════════════════════════════════╗${COLOR_RESET}"
-  echo -e "${COLOR_BLUE}║         Smollama Service Startup                     ║${COLOR_RESET}"
+  echo -e "${COLOR_BLUE}║         Smollama Startup                             ║${COLOR_RESET}"
   echo -e "${COLOR_BLUE}╚═══════════════════════════════════════════════════════╝${COLOR_RESET}"
   echo
 
-  # Check and start Ollama
-  if check_ollama_running; then
-    success "Ollama is already running"
-  else
-    start_ollama
-    wait_for_ollama
-  fi
+  # Resolve the smollama command once
+  local smollama_cmd
+  smollama_cmd=$(resolve_smollama_cmd)
+  info "Using command: $smollama_cmd"
   echo
 
   # Check and start Mosquitto
@@ -365,24 +407,53 @@ main() {
   fi
   echo
 
-  # Verify connectivity
-  verify_services
-  echo
-
-  # Start smollama
-  info "Starting smollama agent..."
-  echo
-
-  cd "$PROJECT_ROOT"
-
-  # Use exec to replace the shell process with smollama
-  # This ensures proper signal handling and that smollama becomes PID 1 of the script
-  if command -v smollama &> /dev/null; then
-    exec smollama run "$@"
+  # Check and start Ollama
+  if check_ollama_running; then
+    success "Ollama is already running"
   else
-    # Fallback to python module
-    exec python3 -m smollama run "$@"
+    start_ollama
+    wait_for_ollama
   fi
+  echo
+
+  # Start the agent in the background
+  info "Starting smollama agent..."
+  cd "$PROJECT_ROOT"
+  $smollama_cmd run "${AGENT_ARGS[@]}" &
+  AGENT_PID=$!
+  echo "$AGENT_PID" > "$PID_FILE"
+  success "Agent started (PID: $AGENT_PID)"
+  echo
+
+  # Brief pause to let the agent claim GPIO before dashboard starts
+  sleep 2
+
+  # Start the dashboard
+  if [[ "$START_DASHBOARD" == true ]]; then
+    info "Starting smollama dashboard on port $DASHBOARD_PORT..."
+    $smollama_cmd dashboard --port "$DASHBOARD_PORT" &
+    DASHBOARD_PID=$!
+    success "Dashboard started (PID: $DASHBOARD_PID)"
+    success "Dashboard available at http://localhost:$DASHBOARD_PORT"
+    echo
+  fi
+
+  # Summary
+  echo -e "${COLOR_GREEN}═══════════════════════════════════════════════════════${COLOR_RESET}"
+  echo -e "${COLOR_GREEN}  Smollama is running!${COLOR_RESET}"
+  echo -e "${COLOR_GREEN}═══════════════════════════════════════════════════════${COLOR_RESET}"
+  echo
+  echo "  Agent PID:     $AGENT_PID"
+  if [[ "$START_DASHBOARD" == true ]]; then
+    echo "  Dashboard PID: $DASHBOARD_PID"
+    echo "  Dashboard URL: http://localhost:$DASHBOARD_PORT"
+  fi
+  echo
+  echo "  Press Ctrl+C to stop all services"
+  echo
+
+  # Wait for child processes — if either exits, the trap will clean up
+  wait $AGENT_PID ${DASHBOARD_PID:+$DASHBOARD_PID} 2>/dev/null || true
 }
 
 # Run main function with all arguments passed through

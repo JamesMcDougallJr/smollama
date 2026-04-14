@@ -114,7 +114,7 @@ python -m smollama.tools list_gpio  # See local sensors
 | `sync.enabled` | Send data to master | `false` | `true` |
 | `sync.llama_url` | Where to send data | N/A | Master IP:8000 |
 | `mem0.enabled` | Aggregate observations | `true` | `false` |
-| `ollama.model` | LLM model | Large (llama2:7b) | Small (llama3.2:1b) |
+| `ollama.model` | LLM model | Large (llama2:7b) | Small (gemma4:e2b) |
 
 ### MQTT Topic Structure
 

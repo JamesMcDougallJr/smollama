@@ -4,7 +4,7 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "ministral-3:3b"
+  model: "gemma4:e2b"
 
 mqtt:
   broker: "localhost"
@@ -36,8 +36,13 @@ plugins:
         echo_pin: 24
         max_distance: 4.0
         chip: 0
-    sh5461as:
+    led:
       enabled: true
+      config:
+        pin: 17        # BCM 17 = Pin 11
+        active_high: true
+    sh5461as:
+      enabled: false
       config:
         digit_pins: [17, 27, 22, 5]
         segment_pins: {a: 6, b: 13, c: 19, d: 26, e: 21, f: 20, g: 16, dp: 12}

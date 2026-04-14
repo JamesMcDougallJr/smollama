@@ -17,7 +17,7 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3.2:1b"  # Small model optimized for Pi
+  model: "gemma4:e2b"
 
 # MQTT: Connect to central broker for pub/sub coordination
 mqtt:

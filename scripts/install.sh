@@ -2,8 +2,8 @@
 #
 # Smollama Installation Script
 #
-# Automates installation of smollama and its dependencies on macOS, Debian, and Ubuntu.
-# Handles Python, UV, package installation, configuration, and optional external services.
+# Installs smollama and all dependencies: Python, UV, Ollama, Mosquitto,
+# LLM + embedding models, and Pi-specific extras when on Raspberry Pi.
 #
 # Usage:
 #   ./scripts/install.sh [OPTIONS]
@@ -11,15 +11,13 @@
 # Options:
 #   --minimal            Install only core dependencies (no extras)
 #   --dev                Install with development dependencies
-#   --all                Install all cross-platform dependencies (default)
-#   --non-interactive    No prompts, use defaults for all choices
-#   -n                   Short form of --non-interactive
+#   --all                Install all dependencies (default)
 #   --help, -h           Show this help message
 #
 # Examples:
-#   ./scripts/install.sh                    # Interactive, all dependencies
-#   ./scripts/install.sh --dev              # Development mode
-#   ./scripts/install.sh --non-interactive  # Automated/CI mode
+#   ./scripts/install.sh              # Full install with all dependencies
+#   ./scripts/install.sh --dev        # Development mode
+#   ./scripts/install.sh --minimal    # Core only, no extras
 #
 
 set -euo pipefail
@@ -31,12 +29,14 @@ PYTHON_MIN_VERSION="3.10"
 OLLAMA_PORT="11434"
 MQTT_PORT="1883"
 
-# Installation mode and flags
+# Installation mode
 INSTALL_MODE="all"
-NON_INTERACTIVE=false
 
 # Set to true when no suitable system Python was found and UV manages Python instead
 UV_PYTHON_MANAGED=false
+
+# Set by detect_raspberry_pi
+IS_RASPBERRY_PI=false
 
 # Colors for output
 if [[ -t 1 ]]; then
@@ -102,10 +102,6 @@ parse_args() {
         INSTALL_MODE="all"
         shift
         ;;
-      --non-interactive|-n)
-        NON_INTERACTIVE=true
-        shift
-        ;;
       --help|-h)
         show_help
         ;;
@@ -141,6 +137,77 @@ detect_platform() {
   fi
 
   echo "$os_type|$pkg_manager"
+}
+
+#
+# Raspberry Pi detection
+#
+
+detect_raspberry_pi() {
+  if [[ -f /proc/device-tree/model ]] && grep -qi "raspberry pi" /proc/device-tree/model 2>/dev/null; then
+    IS_RASPBERRY_PI=true
+    local model
+    model=$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || echo "Raspberry Pi")
+    success "Detected Raspberry Pi: $model"
+  else
+    IS_RASPBERRY_PI=false
+  fi
+}
+
+#
+# Pi-specific system dependencies
+#
+
+install_pi_system_deps() {
+  info "Installing Raspberry Pi system dependencies..."
+
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq \
+    build-essential \
+    libgpiod2
+
+  success "Pi system dependencies installed"
+}
+
+#
+# Pi GPIO enablement
+#
+
+enable_pi_gpio() {
+  info "Enabling GPIO interfaces..."
+
+  if ! command -v raspi-config &> /dev/null; then
+    warn "raspi-config not found, skipping GPIO auto-configuration"
+    return 0
+  fi
+
+  # Enable SPI
+  if sudo raspi-config nonint get_spi 2>/dev/null | grep -q "1"; then
+    info "Enabling SPI interface..."
+    sudo raspi-config nonint do_spi 0
+    success "SPI enabled"
+  else
+    success "SPI already enabled"
+  fi
+
+  # Enable I2C
+  if sudo raspi-config nonint get_i2c 2>/dev/null | grep -q "1"; then
+    info "Enabling I2C interface..."
+    sudo raspi-config nonint do_i2c 0
+    success "I2C enabled"
+  else
+    success "I2C already enabled"
+  fi
+
+  # Add current user to gpio group
+  if ! groups "$USER" | grep -q gpio; then
+    info "Adding $USER to gpio group..."
+    sudo usermod -a -G gpio "$USER"
+    success "User added to gpio group"
+    warn "Log out and back in for group changes to take effect"
+  else
+    success "User already in gpio group"
+  fi
 }
 
 #
@@ -255,7 +322,8 @@ install_uv() {
     warn "UV installation via curl failed, falling back to pip"
 
     # Fallback to pip installation
-    local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+    local python_cmd
+    python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
     if [[ -n "$python_cmd" ]]; then
       "$python_cmd" -m pip install --user uv
       export PATH="$HOME/.local/bin:$PATH"
@@ -290,9 +358,17 @@ install_packages() {
       ;;
     dev)
       extras="--extra dev"
+      # On Pi, also include pi extras
+      if [[ "$IS_RASPBERRY_PI" == true ]]; then
+        extras="--extra dev --extra pi"
+      fi
       ;;
     all)
       extras="--extra all"
+      # On Pi, also include pi extras
+      if [[ "$IS_RASPBERRY_PI" == true ]]; then
+        extras="--extra all --extra pi"
+      fi
       ;;
   esac
 
@@ -309,7 +385,11 @@ install_packages() {
       local tool_package="."
       case "$mode" in
         all)
-          tool_package=".[all]"
+          if [[ "$IS_RASPBERRY_PI" == true ]]; then
+            tool_package=".[all,pi]"
+          else
+            tool_package=".[all]"
+          fi
           ;;
         minimal)
           tool_package="."
@@ -326,7 +406,8 @@ install_packages() {
     success "Packages installed with UV"
   else
     info "Using pip for installation..."
-    local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+    local python_cmd
+    python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
     if [[ -z "$python_cmd" ]]; then
       error "Python $PYTHON_MIN_VERSION or higher not found"
     fi
@@ -340,11 +421,19 @@ install_packages() {
         pip_flags="--user"
         ;;
       dev)
-        pip_extras=".[dev]"
+        if [[ "$IS_RASPBERRY_PI" == true ]]; then
+          pip_extras=".[dev,pi]"
+        else
+          pip_extras=".[dev]"
+        fi
         pip_flags="-e"
         ;;
       all)
-        pip_extras=".[all]"
+        if [[ "$IS_RASPBERRY_PI" == true ]]; then
+          pip_extras=".[all,pi]"
+        else
+          pip_extras=".[all]"
+        fi
         pip_flags="--user"
         ;;
     esac
@@ -464,11 +553,17 @@ install_ollama() {
 }
 
 pull_ollama_model() {
-  local model="${1:-llama3.2:1b}"
+  local model="${1:-gemma4:e2b}"
 
   if ! command -v ollama &> /dev/null; then
     warn "Ollama not installed, skipping model pull"
     return 1
+  fi
+
+  # Check if model is already available
+  if ollama list 2>/dev/null | grep -q "$(echo "$model" | cut -d: -f1)"; then
+    success "Model $model already available"
+    return 0
   fi
 
   info "Pulling Ollama model: $model (this may take a few minutes)..."
@@ -577,7 +672,8 @@ validate_installation() {
   cd "$PROJECT_ROOT"
 
   # Try to import smollama — prefer system Python, fall back to uv run
-  local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+  local python_cmd
+  python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
 
   if [[ -n "$python_cmd" ]]; then
     if "$python_cmd" -c "import smollama; print('OK')" &> /dev/null; then
@@ -597,7 +693,8 @@ validate_installation() {
 
   # Check if smollama command is available
   if command -v smollama &> /dev/null; then
-    local smollama_path=$(command -v smollama)
+    local smollama_path
+    smollama_path=$(command -v smollama)
     success "Smollama command is available at: $smollama_path"
   elif [[ -n "$python_cmd" ]] && "$python_cmd" -m smollama --version &> /dev/null; then
     success "Smollama module is available (use: python -m smollama)"
@@ -636,19 +733,14 @@ show_next_steps() {
   echo "  1. Edit configuration (optional):"
   echo "     ${COLOR_BLUE}vim config.yaml${COLOR_RESET}"
   echo
-  echo "  2. Check system status:"
+  echo "  2. Start everything (agent + dashboard + services):"
+  echo "     ${COLOR_BLUE}./scripts/start.sh${COLOR_RESET}"
+  echo
+  echo "  3. Check system status:"
   if command -v smollama &> /dev/null; then
     echo "     ${COLOR_BLUE}smollama status${COLOR_RESET}"
   else
     echo "     ${COLOR_BLUE}python -m smollama status${COLOR_RESET}"
-    echo "     ${COLOR_YELLOW}(or 'smollama status' after adding ~/.local/bin to PATH)${COLOR_RESET}"
-  fi
-  echo
-  echo "  3. Start the agent:"
-  echo "     ${COLOR_BLUE}./scripts/start.sh${COLOR_RESET}"
-  if command -v smollama &> /dev/null; then
-    echo "     or"
-    echo "     ${COLOR_BLUE}smollama run${COLOR_RESET}"
   fi
   echo
   echo "  4. View available commands:"
@@ -667,9 +759,8 @@ show_next_steps() {
   fi
 
   echo "Useful resources:"
-  echo "  README: $PROJECT_ROOT/README.md"
   echo "  Config: $PROJECT_ROOT/config.yaml"
-  echo "  Roadmap: $PROJECT_ROOT/roadmap/"
+  echo "  Dashboard: http://localhost:8080 (after starting)"
   echo
 }
 
@@ -687,16 +778,29 @@ main() {
   parse_args "$@"
 
   info "Installation mode: $INSTALL_MODE"
-  info "Non-interactive: $NON_INTERACTIVE"
   echo
 
   # Detect platform
   info "Detecting platform..."
-  local platform_info=$(detect_platform)
-  local os_type=$(echo "$platform_info" | cut -d'|' -f1)
-  local pkg_manager=$(echo "$platform_info" | cut -d'|' -f2)
+  local platform_info
+  platform_info=$(detect_platform)
+  local os_type
+  os_type=$(echo "$platform_info" | cut -d'|' -f1)
+  local pkg_manager
+  pkg_manager=$(echo "$platform_info" | cut -d'|' -f2)
   success "Platform: $os_type ($pkg_manager)"
+
+  # Detect Raspberry Pi
+  detect_raspberry_pi
   echo
+
+  # Pi-specific system setup
+  if [[ "$IS_RASPBERRY_PI" == true ]]; then
+    install_pi_system_deps
+    echo
+    enable_pi_gpio
+    echo
+  fi
 
   # Install UV first — it's a static binary and doesn't need Python
   install_uv
@@ -704,7 +808,8 @@ main() {
 
   # Check Python version (searches versioned binaries and common extra paths)
   info "Checking Python version..."
-  local python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
+  local python_cmd
+  python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
 
   if [[ -z "$python_cmd" ]]; then
     warn "No system Python $PYTHON_MIN_VERSION+ found"
@@ -714,18 +819,7 @@ main() {
       if find_or_install_python_via_uv; then
         info "UV will manage Python $PYTHON_MIN_VERSION for the smollama environment"
       else
-        # UV is present but couldn't install — offer system install as last resort
-        if [[ "$NON_INTERACTIVE" == true ]]; then
-          install_python "$os_type" "$pkg_manager"
-        else
-          read -p "Install Python $PYTHON_MIN_VERSION via system package manager? (y/n) " -n 1 -r
-          echo
-          if [[ $REPLY =~ ^[Yy]$ ]]; then
-            install_python "$os_type" "$pkg_manager"
-          else
-            error "Python $PYTHON_MIN_VERSION or higher is required. Install it manually or re-run the script."
-          fi
-        fi
+        install_python "$os_type" "$pkg_manager"
 
         python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
         if [[ -z "$python_cmd" && "$UV_PYTHON_MANAGED" == false ]]; then
@@ -733,18 +827,7 @@ main() {
         fi
       fi
     else
-      # UV unavailable — fall back to system package manager
-      if [[ "$NON_INTERACTIVE" == true ]]; then
-        install_python "$os_type" "$pkg_manager"
-      else
-        read -p "Install Python $PYTHON_MIN_VERSION? (y/n) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-          install_python "$os_type" "$pkg_manager"
-        else
-          error "Python $PYTHON_MIN_VERSION or higher is required"
-        fi
-      fi
+      install_python "$os_type" "$pkg_manager"
 
       python_cmd=$(check_python_version "$PYTHON_MIN_VERSION")
       if [[ -z "$python_cmd" ]]; then
@@ -754,7 +837,8 @@ main() {
   fi
 
   if [[ -n "$python_cmd" ]]; then
-    local python_version=$("$python_cmd" --version 2>&1 | awk '{print $2}')
+    local python_version
+    python_version=$("$python_cmd" --version 2>&1 | awk '{print $2}')
     success "Python $python_version ($python_cmd)"
   else
     success "Python $PYTHON_MIN_VERSION will be managed by UV"
@@ -769,59 +853,20 @@ main() {
   setup_config
   echo
 
-  # Optional: Install Ollama
-  if [[ "$NON_INTERACTIVE" == true ]]; then
-    install_ollama "$os_type" "$pkg_manager"
-  else
-    if command -v ollama &> /dev/null || check_ollama; then
-      success "Ollama already available"
-    else
-      read -p "Install Ollama (LLM runtime)? (y/n) " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]]; then
-        install_ollama "$os_type" "$pkg_manager"
-      else
-        info "Skipping Ollama installation"
-        echo "    Install later from: https://ollama.ai/download"
-      fi
-    fi
-  fi
+  # Install Mosquitto (required dependency)
+  install_mosquitto "$os_type" "$pkg_manager"
   echo
 
-  # Optional: Pull Ollama model
-  if command -v ollama &> /dev/null; then
-    if [[ "$NON_INTERACTIVE" == true ]]; then
-      pull_ollama_model "llama3.2:1b"
-    else
-      read -p "Pull default model (llama3.2:1b)? (y/n) " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]]; then
-        pull_ollama_model "llama3.2:1b"
-      else
-        info "Skipping model pull"
-        echo "    Pull later with: ollama pull llama3.2:1b"
-      fi
-    fi
-  fi
+  # Install Ollama (required dependency)
+  install_ollama "$os_type" "$pkg_manager"
   echo
 
-  # Optional: Install Mosquitto
-  if [[ "$NON_INTERACTIVE" == true ]]; then
-    install_mosquitto "$os_type" "$pkg_manager"
-  else
-    if command -v mosquitto &> /dev/null || check_mosquitto; then
-      success "Mosquitto already available"
-    else
-      read -p "Install Mosquitto (MQTT broker)? (y/n) " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]]; then
-        install_mosquitto "$os_type" "$pkg_manager"
-      else
-        info "Skipping Mosquitto installation"
-        echo "    Install later or use remote MQTT broker"
-      fi
-    fi
-  fi
+  # Pull LLM model
+  pull_ollama_model "gemma4:e2b"
+  echo
+
+  # Pull embedding model (required by memory system)
+  pull_ollama_model "all-minilm:l6-v2"
   echo
 
   # Validate installation

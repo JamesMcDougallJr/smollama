@@ -42,40 +42,43 @@ cd smollama
 
 # Or for minimal installation (core only)
 ./scripts/install.sh --minimal
-
-# Non-interactive mode (for CI/automation)
-./scripts/install.sh --non-interactive
 ```
 
 The install script will:
-- Detect your platform (macOS, Debian, Ubuntu)
+- Auto-detect your platform (Raspberry Pi, macOS, Debian/Ubuntu)
 - Install Python 3.10+ if needed
-- Install UV (fast package manager) or use pip as fallback
-- Install smollama and dependencies
-- Optionally install Ollama and Mosquitto
-- Pull the default LLM model (llama3.2:1b)
-- Create a default config.yaml
+- Install UV (fast package manager)
+- Install smollama and all dependencies (including Pi GPIO libraries on Raspberry Pi)
+- Install Mosquitto (MQTT broker) and Ollama
+- Pull the default LLM model (`gemma4:e2b`) and embedding model (`all-minilm:l6-v2`)
+- Create a default `config.yaml`
 
 ### Start Services
 
 After installation, use the start script to ensure all services are running:
 
 ```bash
-# Start Ollama, MQTT, and smollama agent
+# Start Ollama, MQTT, agent, and dashboard
 ./scripts/start.sh
 
 # With verbose logging
 ./scripts/start.sh -v
 
-# With custom options (passed to smollama run)
-./scripts/start.sh --host 0.0.0.0 --log-level debug
+# Agent only (no dashboard)
+./scripts/start.sh --no-dashboard
+
+# Custom dashboard port
+./scripts/start.sh --dashboard-port 3000
+
+# Pass extra args to the agent after --
+./scripts/start.sh -- --skip-preflight
 ```
 
 The start script will:
 - Check if Ollama is running (auto-start if needed)
 - Check if MQTT broker is running (auto-start if needed)
 - Verify connectivity with `smollama status`
-- Launch the smollama agent
+- Launch the smollama agent and dashboard (agent claims GPIO first, dashboard falls back to mock mode)
 
 ### Raspberry Pi Setup
 
@@ -99,10 +102,8 @@ journalctl -u smollama --since today     # Today's logs
 
 The Pi setup script will:
 - Verify Raspberry Pi hardware
-- Enable GPIO interfaces (SPI, I2C)
-- Install system dependencies (GPIO libraries, MQTT broker)
-- Install smollama with Pi-specific extras
-- Create systemd service for auto-start on boot
+- Delegate to `install.sh` for all package/dependency installation
+- Create systemd service for auto-start on boot (runs `start.sh`)
 - Configure log rotation (journal + logrotate)
 - Display network info and dashboard URL
 
@@ -200,10 +201,10 @@ node:
 
 ollama:
   base_url: "http://localhost:11434"
-  model: "llama3.2:1b"
+  model: "gemma4:e2b"
 
 mqtt:
-  broker: "192.168.1.100"
+  broker: "localhost"
   port: 1883
   topics:
     subscribe:
@@ -417,7 +418,7 @@ pytest tests/test_local_store.py -v
 pytest tests/ -k "memory" -v
 ```
 
-Current coverage: ~70% across 183 tests.
+Current coverage: ~70% across 231 tests.
 
 ## Troubleshooting
 
@@ -569,6 +570,10 @@ smollama/
 ├── ollama_client.py     # Ollama API wrapper
 ├── mqtt_client.py       # MQTT client
 ├── gpio_reader.py       # GPIO abstraction
+├── plugins/             # Plugin system
+│   ├── base.py          # ReadPlugin, WritePlugin, ReadWritePlugin
+│   ├── loader.py        # Auto-discovery and lifecycle management
+│   └── builtin/         # Built-in plugins (system, gpio, hcsr04, displays)
 ├── readings/            # Unified reading sources
 │   ├── base.py          # Reading dataclass & manager
 │   ├── system.py        # System metrics provider

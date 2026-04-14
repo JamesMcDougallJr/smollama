@@ -33,7 +33,7 @@ def base_config():
     """Create a minimal test config."""
     return Config(
         node=NodeConfig(name="test-node"),
-        ollama=OllamaConfig(host="localhost", port=11434, model="llama3.2:1b"),
+        ollama=OllamaConfig(host="localhost", port=11434, model="gemma4:e2b"),
         mqtt=MQTTConfig(
             broker="localhost",
             port=1883,
@@ -110,7 +110,7 @@ class TestPreflightOllama:
         with patch("smollama.preflight.OllamaClient") as MockClient:
             instance = MockClient.return_value
             instance.check_connection = AsyncMock(return_value=True)
-            instance.list_models = AsyncMock(return_value=["llama3.2:1b", "all-minilm:l6-v2"])
+            instance.list_models = AsyncMock(return_value=["gemma4:e2b", "all-minilm:l6-v2"])
             await _check_ollama(base_config, result)
 
         assert result.passed is True
@@ -163,7 +163,7 @@ class TestPreflightOllama:
         assert any("Pulled Ollama model" in a for a in result.actions_taken)
         # Also pulls the embedding model since list_models returns empty
         assert instance.pull_model.call_count == 2
-        instance.pull_model.assert_any_call("llama3.2:1b")
+        instance.pull_model.assert_any_call("gemma4:e2b")
         instance.pull_model.assert_any_call("all-minilm:l6-v2")
 
     @pytest.mark.asyncio
@@ -192,7 +192,7 @@ class TestPreflightOllama:
             instance = MockClient.return_value
             instance.check_connection = AsyncMock(return_value=True)
             # Main model available, embedding model not
-            instance.list_models = AsyncMock(return_value=["llama3.2:1b"])
+            instance.list_models = AsyncMock(return_value=["gemma4:e2b"])
             instance.pull_model = AsyncMock(return_value=False)
             await _check_ollama(base_config, result)
 
@@ -364,7 +364,7 @@ class TestRunPreflight:
         ):
             ollama = MockOllama.return_value
             ollama.check_connection = AsyncMock(return_value=True)
-            ollama.list_models = AsyncMock(return_value=["llama3.2:1b", "all-minilm:l6-v2"])
+            ollama.list_models = AsyncMock(return_value=["gemma4:e2b", "all-minilm:l6-v2"])
 
             mqtt = MockMQTT.return_value
             mqtt.check_connection = AsyncMock(return_value=True)

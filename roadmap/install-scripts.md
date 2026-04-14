@@ -11,7 +11,7 @@ Scripts to simplify setup and daily operation, targeting `scripts/` directory.
 - ✅ Install UV (fast package manager) with pip fallback
 - ✅ Install packages via `uv sync` or `pip install -e ".[mode]"`
 - ✅ Support for --minimal, --dev, --all modes
-- ✅ Pull default Ollama model (`llama3.2:1b`) with retry logic
+- ✅ Pull default Ollama model (`gemma4:e2b`) with retry logic
 - ✅ Copy `config.example.yaml` to `config.yaml` if not present
 - ✅ Optional Ollama and Mosquitto installation (interactive prompts)
 - ✅ Installation validation and next-steps summary

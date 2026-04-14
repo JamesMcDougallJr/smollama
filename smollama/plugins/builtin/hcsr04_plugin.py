@@ -5,13 +5,13 @@ import warnings
 from datetime import datetime
 from typing import Any
 
-from smollama.plugins.base import PluginMetadata, SensorPlugin
+from smollama.plugins.base import PluginMetadata, ReadPlugin
 from smollama.readings.base import Reading
 
 logger = logging.getLogger(__name__)
 
 
-class HCSR04SensorPlugin(SensorPlugin):
+class HCSR04SensorPlugin(ReadPlugin):
     """HC-SR04 ultrasonic distance sensor plugin.
 
     Uses gpiozero's DistanceSensor with the LGPIOFactory backend,
@@ -38,7 +38,7 @@ class HCSR04SensorPlugin(SensorPlugin):
             author="Smollama Team",
             description="HC-SR04 ultrasonic distance sensor plugin",
             dependencies=["gpiozero>=2.0", "lgpio>=0.2"],
-            plugin_type="sensor",
+            plugin_type="read",
         )
 
     @property
