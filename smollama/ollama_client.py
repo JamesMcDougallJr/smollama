@@ -59,6 +59,7 @@ class OllamaClient:
                 model=self.config.model,
                 messages=messages,
                 tools=tools or [],
+                keep_alive=self.config.keep_alive,
             ),
         )
 

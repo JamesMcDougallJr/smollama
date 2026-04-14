@@ -347,7 +347,8 @@ class TestMaintenance:
         assert stats["readings_count"] == 0
         assert stats["observations_count"] == 0
         assert stats["memories_count"] == 0
-        assert stats["vector_search_enabled"] is False
+        # vector_search_enabled depends on whether sqlite-vec is installed; don't assert its value
+        assert "vector_search_enabled" in stats
         # No db_size_mb for in-memory database
 
     def test_get_stats_with_data(self, store, sample_reading):

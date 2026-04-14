@@ -9,6 +9,7 @@
 | [Install Scripts](install-scripts.md) | ✅ Complete | Medium | `install.sh`, `start.sh`, `setup-pi.sh` |
 | [Plugin System](plugin-system.md) | ✅ Complete | Large | `SensorPlugin` / `ToolPlugin` interfaces, plugin loader, discovery |
 | [mDNS Discovery](mdns-discovery.md) | ✅ Complete | Small | Zero-config Pi cluster auto-discovery |
+| [Memory Utilization](memory-utilization.md) | In progress | Small-Large | keep_alive, age-off, compaction, llama.cpp migration |
 | [Improvements](improvements.md) | Not started | Medium | Dashboard, memory, agent, config, MQTT enhancements |
 | [WebSocket Dashboard](websocket-dashboard.md) | Not started | Medium | Real-time dashboard updates via WebSocket |
 | [Multi-Node Dashboard](multi-node-dashboard.md) | Not started | Medium | Unified view of all nodes |
@@ -18,8 +19,8 @@
 
 ## Progress
 
-- 5 / 11 plans started
-- 5 / 11 plans completed (45%)
+- 6 / 12 plans started
+- 5 / 12 plans completed (42%)
 
 ## Plan Details
 
@@ -31,6 +32,9 @@ Migrate from pip to UV package manager for faster dependency installation and re
 
 ### [Install Scripts](install-scripts.md)
 Three shell scripts (`install.sh`, `start.sh`, `setup-pi.sh`) to simplify first-time setup and daily operation on desktop and Raspberry Pi.
+
+### [Memory Utilization](memory-utilization.md)
+Four phases to reduce RAM pressure and eliminate cold-load latency: (1) ✅ set Ollama `keep_alive=-1` so the model stays resident between 15-minute loop ticks, (2) ✅ automatic age-off for readings (7d) and observations (3d) on each loop tick, (3) ✅ LLM-powered compaction when free RAM drops below a threshold, (4) optional llama.cpp migration as a clean future swap.
 
 ### [Improvements](improvements.md)
 Enhancements grouped by subsystem: dashboard (auto-refresh, search, sparklines), memory (retention, export), agent (structured logging, graceful degradation), config (validation), MQTT (reconnect, persistence).

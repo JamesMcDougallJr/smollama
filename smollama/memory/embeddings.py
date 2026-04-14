@@ -123,15 +123,18 @@ class OllamaEmbeddings(EmbeddingProvider):
         self,
         model: str = "all-minilm:l6-v2",
         host: str = "http://localhost:11434",
+        keep_alive: str = "-1",
     ):
         """Initialize Ollama embeddings.
 
         Args:
             model: Ollama embedding model name.
             host: Ollama server URL.
+            keep_alive: How long to keep the embedding model in memory (-1=forever).
         """
         self._model = model
         self._host = host
+        self._keep_alive = keep_alive
         self._client = None
         self._dimension = 384  # Default for all-minilm
 
@@ -165,7 +168,7 @@ class OllamaEmbeddings(EmbeddingProvider):
         client = self._get_client()
 
         try:
-            response = client.embed(model=self._model, input=text)
+            response = client.embed(model=self._model, input=text, keep_alive=self._keep_alive)
             embeddings = response.get("embeddings", [[]])[0]
 
             if not embeddings:
@@ -203,7 +206,7 @@ class OllamaEmbeddings(EmbeddingProvider):
         client = self._get_client()
 
         try:
-            response = client.embed(model=self._model, input=texts)
+            response = client.embed(model=self._model, input=texts, keep_alive=self._keep_alive)
             all_embeddings = response.get("embeddings", [])
 
             results = []

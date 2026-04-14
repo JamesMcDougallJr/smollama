@@ -4,10 +4,11 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "llama3.2:1b"  # Small model for Pi
+  model: "gemma4:e2b"
+  keep_alive: "-1"  # keep model in memory indefinitely; use "30m", "1h", or "0" to unload
 
 mqtt:
-  broker: "192.168.1.100"
+  broker: "localhost"
   port: 1883
   # Optional auth
   # username: "smollama"
@@ -39,6 +40,16 @@ plugins:
     system:
       enabled: true
       config: {}  # System plugin has no configuration
+    led:
+      enabled: false  # Enable if an LED is wired to a GPIO pin
+      config:
+        pin: 17          # BCM 17 = Pi Pin 11
+        active_high: true  # false if LED is wired between 3.3V and GPIO (active-low)
+    dht11:
+      enabled: false  # Enable only if DHT11 is physically wired
+      config:
+        pin: 4               # BCM 4 = Pi Pin 7 (GPIO4)
+        min_interval_sec: 2.0  # DHT11 needs ≥1s between reads; 2s recommended
     hcsr04:
       enabled: false  # Enable only if HC-SR04 is physically wired
       config:
@@ -56,6 +67,14 @@ plugins:
       config:
         segment_pins: {a: 27, b: 22, c: 11, d: 8, e: 10, f: 17, g: 4, dp: 9}
         common_pin: null  # BCM pin for common cathode, or null if tied directly to GND
+    lcd1602:
+      enabled: false  # Enable only if 1602A LCD with I2C backpack is connected
+      config:
+        i2c_address: 0x27  # Use 0x3F for PCF8574A backpacks; run `i2cdetect -y 1` to check
+        i2c_port: 1        # I2C bus number (1 on all modern Pi)
+        cols: 16
+        rows: 2
+        backlight: true
 
   # Custom plugins (installed via `smollama plugin install`)
   custom: []
@@ -108,6 +127,10 @@ memory:
   observation_interval_minutes: 15
   observation_lookback_minutes: 60
   sensor_log_retention_days: 90
+  observation_max_age_days: 3    # delete observations older than this on each loop tick
+  readings_max_age_days: 7       # delete readings older than this on each loop tick
+  compact_memory_threshold_mb: 200  # compact old observations when free RAM drops below this
+  compact_batch_size: 20         # number of observations to summarize per compaction run
 
 # CRDT sync configuration (for multi-node setups)
 sync:

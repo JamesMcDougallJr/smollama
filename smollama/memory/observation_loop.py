@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..plugins.base import ObservationHook
 from ..readings import ReadingManager
 
 if TYPE_CHECKING:
@@ -61,6 +62,11 @@ class ObservationLoop:
         agent: "Agent",
         interval_minutes: int = 15,
         lookback_minutes: int = 60,
+        plugins: list | None = None,
+        observation_max_age_days: int = 3,
+        readings_max_age_days: int = 7,
+        compact_memory_threshold_mb: int = 200,
+        compact_batch_size: int = 20,
     ):
         """Initialize the observation loop.
 
@@ -70,12 +76,30 @@ class ObservationLoop:
             agent: Agent for running LLM queries.
             interval_minutes: How often to generate observations.
             lookback_minutes: How far back to look for context.
+            plugins: Loaded plugin instances. Any that implement ObservationHook
+                     will receive on_observation_begin/end callbacks each cycle.
+            observation_max_age_days: Delete observations older than this on each tick.
+            readings_max_age_days: Delete readings older than this on each tick.
+            compact_memory_threshold_mb: Compact when free RAM drops below this (MB).
+            compact_batch_size: Number of observations to summarize per compaction run.
         """
         self._store = store
         self._readings = readings
         self._agent = agent
         self._interval = interval_minutes * 60  # Convert to seconds
         self._lookback = lookback_minutes
+        self._obs_max_age_days = observation_max_age_days
+        self._readings_max_age_days = readings_max_age_days
+        self._compact_threshold_mb = compact_memory_threshold_mb
+        self._compact_batch_size = compact_batch_size
+        self._hooks: list[ObservationHook] = [
+            p for p in (plugins or []) if isinstance(p, ObservationHook)
+        ]
+        if self._hooks:
+            logger.info(
+                "Observation hooks registered: %s",
+                ", ".join(type(h).__name__ for h in self._hooks),
+            )
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -121,6 +145,30 @@ class ObservationLoop:
         """Generate an observation from current readings."""
         logger.debug("Generating observation...")
 
+        for hook in self._hooks:
+            try:
+                await hook.on_observation_begin()
+            except Exception as e:
+                logger.debug("on_observation_begin error in %s: %s", type(hook).__name__, e)
+
+        success = False
+        try:
+            await self._do_generate_observation()
+            success = True
+        finally:
+            for hook in self._hooks:
+                try:
+                    await hook.on_observation_end(success)
+                except Exception as e:
+                    logger.debug("on_observation_end error in %s: %s", type(hook).__name__, e)
+
+    async def _do_generate_observation(self) -> None:
+        """Inner implementation of observation generation."""
+        # 0. Prune stale data and compact if memory is low
+        self._store.cleanup_old_readings(days=self._readings_max_age_days)
+        self._store.cleanup_old_observations(days=self._obs_max_age_days)
+        await self._maybe_compact()
+
         # 1. Read all current values and log them
         current_readings = await self._readings.read_all()
 
@@ -159,13 +207,6 @@ class ObservationLoop:
 
             if not response:
                 logger.warning("No response from LLM for observation - operating in degraded mode")
-                # Store system observation about degraded mode
-                self._store.add_observation(
-                    text="System operating in degraded mode: LLM unavailable for observation generation",
-                    observation_type="status",
-                    confidence=1.0,
-                    related_sources=source_ids,
-                )
                 return
 
             # 6. Parse and store observations
@@ -173,14 +214,60 @@ class ObservationLoop:
 
         except Exception as e:
             logger.error(f"LLM query failed during observation: {e}")
-            # Store system observation about the error
-            self._store.add_observation(
-                text=f"System operating in degraded mode: LLM error ({type(e).__name__})",
-                observation_type="status",
-                confidence=1.0,
-                related_sources=source_ids,
-            )
             # Continue loop - sensor logging already completed
+
+    @staticmethod
+    def _get_free_memory_mb() -> float:
+        """Return available system RAM in MB, reading /proc/meminfo."""
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / 1024  # kB → MB
+        except OSError:
+            pass
+        return float("inf")  # non-Linux: never compact
+
+    async def _maybe_compact(self) -> None:
+        """Compact old observations into a summary if free RAM is low."""
+        free_mb = self._get_free_memory_mb()
+        if free_mb >= self._compact_threshold_mb:
+            return
+
+        oldest = self._store.get_oldest_observations(limit=self._compact_batch_size)
+        if len(oldest) < 5:
+            return  # not enough to bother
+
+        logger.info(
+            "Free RAM %.0f MB below threshold (%d MB) — compacting %d observations",
+            free_mb,
+            self._compact_threshold_mb,
+            len(oldest),
+        )
+
+        summary = await self._summarize_observations(oldest)
+        if summary:
+            self._store.add_observation(summary, observation_type="summary", confidence=0.9)
+            self._store.delete_observations([o["id"] for o in oldest])
+            logger.info("Compacted %d observations into 1 summary", len(oldest))
+
+    async def _summarize_observations(self, observations: list[dict]) -> str | None:
+        """Ask the LLM to summarize a batch of observations into 2-3 sentences."""
+        numbered = "\n".join(
+            f"{i + 1}. [{o['timestamp'][:16]}] {o['text']}"
+            for i, o in enumerate(observations)
+        )
+        prompt = (
+            f"Summarize the following {len(observations)} sensor observations from a Raspberry Pi "
+            f"into 2-3 sentences capturing the key patterns, trends, and anomalies. "
+            f"Be concise.\n\nObservations:\n{numbered}\n\nSummary:"
+        )
+        try:
+            response = await self._agent.query(prompt)
+            return response.strip() if response else None
+        except Exception as e:
+            logger.warning("Compaction summarization failed: %s", e)
+            return None
 
     def _format_current_readings(self, readings) -> str:
         """Format current readings for the prompt."""

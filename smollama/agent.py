@@ -64,6 +64,7 @@ class Agent:
             embedder = OllamaEmbeddings(
                 model=config.memory.embedding_model,
                 host=config.ollama.base_url,
+                keep_alive=config.ollama.keep_alive,
             )
         else:
             embedder = MockEmbeddings()
@@ -83,6 +84,11 @@ class Agent:
                 agent=self,
                 interval_minutes=config.memory.observation_interval_minutes,
                 lookback_minutes=config.memory.observation_lookback_minutes,
+                plugins=self._plugin_loader.get_loaded_plugins(),
+                observation_max_age_days=config.memory.observation_max_age_days,
+                readings_max_age_days=config.memory.readings_max_age_days,
+                compact_memory_threshold_mb=config.memory.compact_memory_threshold_mb,
+                compact_batch_size=config.memory.compact_batch_size,
             )
 
         # Initialize Mem0 components (for Llama node cross-node search)
@@ -158,9 +164,9 @@ class Agent:
         if self._mem0_client:
             self._tools.register(CrossNodeRecallTool(self._mem0_client))
 
-        # Tool plugins (e.g. display devices) loaded from plugin loader
-        for tool_plugin in self._plugin_loader.get_tool_plugins():
-            for tool in tool_plugin.get_tools():
+        # Write plugins (e.g. display devices) loaded from plugin loader
+        for write_plugin in self._plugin_loader.get_write_plugins():
+            for tool in write_plugin.get_tools():
                 self._tools.register(tool)
 
         # Conversation history for context

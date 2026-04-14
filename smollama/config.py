@@ -17,7 +17,8 @@ class NodeConfig:
 class OllamaConfig:
     host: str = "localhost"
     port: int = 11434
-    model: str = "llama3.2:1b"
+    model: str = "gemma4:e2b"
+    keep_alive: str = "-1"  # how long to keep model in memory; -1=forever, "30m", "0"=unload
 
     @property
     def base_url(self) -> str:
@@ -75,6 +76,10 @@ class MemoryConfig:
     observation_interval_minutes: int = 15
     observation_lookback_minutes: int = 60
     sensor_log_retention_days: int = 90
+    observation_max_age_days: int = 3    # delete observations older than this on each loop tick
+    readings_max_age_days: int = 7       # delete readings older than this on each loop tick
+    compact_memory_threshold_mb: int = 200  # run compaction when free RAM drops below this
+    compact_batch_size: int = 20         # number of observations to summarize per compaction run
 
 
 @dataclass
@@ -321,6 +326,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     host=ollama_data.get("host", config.ollama.host),
                     port=ollama_data.get("port", config.ollama.port),
                     model=ollama_data.get("model", config.ollama.model),
+                    keep_alive=ollama_data.get("keep_alive", config.ollama.keep_alive),
                 )
 
             # Parse MQTT config
@@ -396,6 +402,22 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     sensor_log_retention_days=mem_data.get(
                         "sensor_log_retention_days",
                         config.memory.sensor_log_retention_days,
+                    ),
+                    observation_max_age_days=mem_data.get(
+                        "observation_max_age_days",
+                        config.memory.observation_max_age_days,
+                    ),
+                    readings_max_age_days=mem_data.get(
+                        "readings_max_age_days",
+                        config.memory.readings_max_age_days,
+                    ),
+                    compact_memory_threshold_mb=mem_data.get(
+                        "compact_memory_threshold_mb",
+                        config.memory.compact_memory_threshold_mb,
+                    ),
+                    compact_batch_size=mem_data.get(
+                        "compact_batch_size",
+                        config.memory.compact_batch_size,
                     ),
                 )
 

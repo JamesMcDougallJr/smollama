@@ -395,6 +395,7 @@ class LocalStore:
         query: str,
         limit: int = 10,
         observation_type: str | None = None,
+        from_ts: str | None = None,
     ) -> list[dict[str, Any]]:
         """Semantic search across observations.
 
@@ -402,15 +403,16 @@ class LocalStore:
             query: Search query text.
             limit: Maximum results to return.
             observation_type: Optional filter by type.
+            from_ts: Optional ISO timestamp lower bound (inclusive).
 
         Returns:
             List of matching observations with similarity scores.
         """
         conn = self._ensure_connected()
 
-        if not self._vec_available:
-            # Fallback to basic text search
-            return self._text_search_observations(query, limit, observation_type)
+        if not self._vec_available or not query.strip():
+            # Fallback to basic text search (also used for empty queries)
+            return self._text_search_observations(query, limit, observation_type, from_ts)
 
         # Vector similarity search
         query_embedding = self._embeddings.embed(query)
@@ -431,8 +433,9 @@ class LocalStore:
 
         results = []
         for row in cursor:
-            # Filter by type if specified
             if observation_type and row["observation_type"] != observation_type:
+                continue
+            if from_ts and row["timestamp"] < from_ts:
                 continue
 
             results.append({
@@ -442,7 +445,7 @@ class LocalStore:
                 "confidence": row["confidence"],
                 "type": row["observation_type"],
                 "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
-                "similarity": 1 - row["distance"],  # Convert distance to similarity
+                "similarity": (1 - row["distance"]) if row["distance"] is not None else None,
             })
 
         return results
@@ -452,14 +455,25 @@ class LocalStore:
         query: str,
         limit: int,
         observation_type: str | None,
+        from_ts: str | None = None,
     ) -> list[dict[str, Any]]:
         """Fallback text-based search for observations."""
         conn = self._ensure_connected()
 
-        # Simple LIKE search
         pattern = f"%{query}%"
 
-        if observation_type:
+        if observation_type and from_ts:
+            cursor = conn.execute(
+                """
+                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                FROM observations
+                WHERE text LIKE ? AND observation_type = ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (pattern, observation_type, from_ts, limit),
+            )
+        elif observation_type:
             cursor = conn.execute(
                 """
                 SELECT id, timestamp, text, confidence, observation_type, related_sources
@@ -469,6 +483,17 @@ class LocalStore:
                 LIMIT ?
                 """,
                 (pattern, observation_type, limit),
+            )
+        elif from_ts:
+            cursor = conn.execute(
+                """
+                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                FROM observations
+                WHERE text LIKE ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (pattern, from_ts, limit),
             )
         else:
             cursor = conn.execute(
@@ -491,7 +516,7 @@ class LocalStore:
                 "confidence": row["confidence"],
                 "type": row["observation_type"],
                 "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
-                "similarity": 0.5,  # Unknown similarity for text search
+                "similarity": None,
             })
 
         return results
@@ -730,6 +755,93 @@ class LocalStore:
             logger.info(f"Cleaned up {deleted} readings older than {days} days")
 
         return deleted
+
+    def cleanup_old_observations(self, days: int = 3) -> int:
+        """Delete observations older than specified days, preserving summaries.
+
+        Args:
+            days: Age threshold in days.
+
+        Returns:
+            Number of observations deleted.
+        """
+        conn = self._ensure_connected()
+
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+        # Remove vector embeddings for the rows we're about to delete
+        if self._vec_available:
+            conn.execute(
+                """
+                DELETE FROM observations_vec
+                WHERE observation_id IN (
+                    SELECT id FROM observations
+                    WHERE timestamp < ? AND observation_type != 'summary'
+                )
+                """,
+                (cutoff,),
+            )
+
+        cursor = conn.execute(
+            "DELETE FROM observations WHERE timestamp < ? AND observation_type != 'summary'",
+            (cutoff,),
+        )
+        conn.commit()
+
+        deleted = cursor.rowcount
+        if deleted > 0:
+            logger.info(f"Cleaned up {deleted} observations older than {days} days")
+
+        return deleted
+
+    def get_oldest_observations(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return the oldest non-summary observations for compaction.
+
+        Args:
+            limit: Maximum number of observations to return.
+
+        Returns:
+            List of observation dicts ordered oldest-first.
+        """
+        conn = self._ensure_connected()
+
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, text, observation_type, confidence
+            FROM observations
+            WHERE observation_type != 'summary'
+            ORDER BY timestamp ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        return [dict(r) for r in rows]
+
+    def delete_observations(self, ids: list[int]) -> None:
+        """Hard-delete observations by ID (used after compaction).
+
+        Args:
+            ids: List of observation row IDs to delete.
+        """
+        if not ids:
+            return
+
+        placeholders = ",".join("?" * len(ids))
+
+        conn = self._ensure_connected()
+
+        if self._vec_available:
+            conn.execute(
+                f"DELETE FROM observations_vec WHERE observation_id IN ({placeholders})",
+                ids,
+            )
+
+        conn.execute(
+            f"DELETE FROM observations WHERE id IN ({placeholders})",
+            ids,
+        )
+        conn.commit()
 
     def get_stats(self) -> dict[str, Any]:
         """Get database statistics.
