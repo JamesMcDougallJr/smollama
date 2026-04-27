@@ -83,6 +83,9 @@ async def cmd_run(args: argparse.Namespace) -> int:
     """Run the agent."""
     config = load_config(args.config)
 
+    if getattr(args, "no_llm", False):
+        config.agent.mode = "edge"
+
     # Run preflight checks unless skipped
     if not getattr(args, "skip_preflight", False):
         print("Running preflight checks...")
@@ -103,7 +106,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
             print()
 
     print(f"Starting Smollama node: {config.node.name}")
-    print(f"Ollama: {config.ollama.base_url} (model: {config.ollama.model})")
+    if config.agent.mode == "edge":
+        print(f"Mode: edge (sensor-push, no LLM)")
+    else:
+        print(f"Ollama: {config.ollama.base_url} (model: {config.ollama.model})")
     print(f"MQTT: {config.mqtt.broker}:{config.mqtt.port}")
     print(f"GPIO: {len(config.gpio.pins)} pins configured", end="")
     if config.gpio.mock:
@@ -855,6 +861,11 @@ def main() -> int:
         "--skip-preflight",
         action="store_true",
         help="Skip preflight checks",
+    )
+    run_parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Run in edge mode: collect sensor readings and publish to MQTT without an LLM",
     )
     run_parser.set_defaults(func=cmd_run)
 

@@ -27,9 +27,7 @@ mqtt:
   # password: "secret"
   topics:
     subscribe:
-      - "smollama/broadcast"        # Broadcast messages from any node
-      - "smollama/llama-master/#"   # Messages for this master node
-      - "smollama/pi-alpaca/#"      # Messages from Alpaca nodes (listen to their status)
+      - "smollama/#"    # Wildcard — receives from all nodes automatically
     publish_prefix: "smollama/llama-master"
 
 # Plugin system configuration

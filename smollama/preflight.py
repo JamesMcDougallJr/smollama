@@ -283,9 +283,11 @@ async def run_preflight(config: Config) -> PreflightResult:
     """
     result = PreflightResult()
 
-    await _check_ollama(config, result)
+    if config.agent.mode != "edge":
+        await _check_ollama(config, result)
     await _check_mqtt(config, result)
-    await _check_mem0(config, result)
-    await _check_sync(config, result)
+    if config.agent.mode != "edge":
+        await _check_mem0(config, result)
+        await _check_sync(config, result)
 
     return result

@@ -55,6 +55,8 @@ class GPIOConfig:
 
 @dataclass
 class AgentConfig:
+    mode: str = "full"  # "full" (LLM-driven) or "edge" (sensor-push, no LLM)
+    edge_publish_interval_seconds: int = 30
     system_prompt: str = (
         "You are a home automation assistant running on a Raspberry Pi. "
         "You can read GPIO sensors and communicate with other nodes via MQTT."
@@ -360,6 +362,11 @@ def load_config(config_path: str | Path | None = None) -> Config:
             if "agent" in data:
                 agent_data = data["agent"]
                 config.agent = AgentConfig(
+                    mode=agent_data.get("mode", config.agent.mode),
+                    edge_publish_interval_seconds=agent_data.get(
+                        "edge_publish_interval_seconds",
+                        config.agent.edge_publish_interval_seconds,
+                    ),
                     system_prompt=agent_data.get(
                         "system_prompt", config.agent.system_prompt
                     ),
@@ -528,10 +535,14 @@ def load_config(config_path: str | Path | None = None) -> Config:
 
     # Set default subscribe topics if none configured
     if not config.mqtt.topics.subscribe:
-        config.mqtt.topics.subscribe = [
-            "smollama/broadcast",
-            f"smollama/{config.node.name}/#",
-        ]
+        if config.agent.mode == "edge":
+            config.mqtt.topics.subscribe = [
+                "smollama/broadcast",
+                f"smollama/{config.node.name}/#",
+            ]
+        else:
+            # Wildcard catches all nodes automatically — no per-device config needed
+            config.mqtt.topics.subscribe = ["smollama/#"]
 
     # Set default publish prefix
     if config.mqtt.topics.publish_prefix == "smollama":

@@ -1,0 +1,66 @@
+# Smollama Configuration: EDGE NODE (Sensor-Push, No LLM)
+# =========================================================
+#
+# Use this on lightweight devices (Pi Zero, Pi 3, bare-metal microcontrollers)
+# that connect to a Mosquitto broker and push sensor readings to the llama-master.
+# No Ollama needed — all reasoning happens on the llama-master node.
+#
+# Setup:
+# 1. Copy this to config.yaml on the edge device
+# 2. Replace LLAMA_MASTER_IP with the IP of your llama-master Pi
+# 3. Enable sensors in the plugins section
+# 4. Run:  smollama run --no-llm
+#    Or keep agent.mode: "edge" here and run normally: smollama run
+#
+# MQTT topic wiring:
+#   This device publishes to:  smollama/edge-01/readings
+#   The llama-master must subscribe to:  smollama/edge-01/#
+#   Add that topic to config.yaml on the llama-master under mqtt.topics.subscribe,
+#   or rename this node to "pi-alpaca" to use the master's existing subscription.
+
+node:
+  name: "edge-01"   # Must be unique per device; sets the MQTT publish prefix
+
+mqtt:
+  broker: "LLAMA_MASTER_IP"   # CHANGE: IP address of your llama-master Pi
+  port: 1883
+  topics:
+    subscribe:
+      - "smollama/broadcast"
+      - "smollama/edge-01/#"   # Receives broadcast and addressed commands (future use)
+    publish_prefix: "smollama/edge-01"
+
+agent:
+  mode: "edge"                      # Disables LLM, observation loop, and memory
+  edge_publish_interval_seconds: 30 # Push a readings snapshot every 30 seconds
+
+plugins:
+  paths: []
+  builtin:
+    system:
+      enabled: true   # CPU temp, memory, load — safe to enable everywhere
+      config: {}
+    hcsr04:
+      enabled: false  # Set true if HC-SR04 ultrasonic sensor is wired
+      config:
+        trig_pin: 23  # BCM 23 = Pi Pin 16
+        echo_pin: 24  # BCM 24 = Pi Pin 18 (must use voltage divider: 1kΩ + 2kΩ)
+        max_distance: 4.0
+        chip: 0
+  custom: []
+
+# The sections below are unused in edge mode.
+# They are present so this config can be promoted to full mode
+# by changing agent.mode to "full" and filling in the ollama section.
+
+memory:
+  observation_enabled: false
+
+sync:
+  enabled: false
+
+mem0:
+  enabled: false
+
+discovery:
+  enabled: false

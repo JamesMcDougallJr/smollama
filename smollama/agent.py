@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from .config import Config
@@ -33,9 +34,10 @@ class Agent:
     def __init__(self, config: Config):
         self.config = config
         self._running = False
+        self._is_edge = config.agent.mode == "edge"
 
         # Initialize core components
-        self._ollama = OllamaClient(config.ollama)
+        self._ollama = OllamaClient(config.ollama) if not self._is_edge else None
         self._mqtt = MQTTClient(config.mqtt)
         self._gpio = GPIOReader(config.gpio)
 
@@ -59,121 +61,103 @@ class Agent:
         self._readings.register(GPIOReadingProvider(self._gpio))
         self._readings.register(SystemReadingProvider())
 
-        # Initialize memory system
-        if config.memory.embedding_provider == "ollama":
-            embedder = OllamaEmbeddings(
-                model=config.memory.embedding_model,
-                host=config.ollama.base_url,
-                keep_alive=config.ollama.keep_alive,
-            )
-        else:
-            embedder = MockEmbeddings()
-
-        self._memory = LocalStore(
-            db_path=config.memory.db_path,
-            node_id=config.node.name,
-            embeddings=embedder,
-        )
-
-        # Initialize observation loop (started later in start())
+        # Initialize memory system (skipped in edge mode)
+        self._memory: LocalStore | None = None
         self._observation_loop: ObservationLoop | None = None
-        if config.memory.observation_enabled:
-            self._observation_loop = ObservationLoop(
-                store=self._memory,
-                readings=self._readings,
-                agent=self,
-                interval_minutes=config.memory.observation_interval_minutes,
-                lookback_minutes=config.memory.observation_lookback_minutes,
-                plugins=self._plugin_loader.get_loaded_plugins(),
-                observation_max_age_days=config.memory.observation_max_age_days,
-                readings_max_age_days=config.memory.readings_max_age_days,
-                compact_memory_threshold_mb=config.memory.compact_memory_threshold_mb,
-                compact_batch_size=config.memory.compact_batch_size,
+        if not self._is_edge:
+            if config.memory.embedding_provider == "ollama":
+                embedder = OllamaEmbeddings(
+                    model=config.memory.embedding_model,
+                    host=config.ollama.base_url,
+                    keep_alive=config.ollama.keep_alive,
+                )
+            else:
+                embedder = MockEmbeddings()
+
+            self._memory = LocalStore(
+                db_path=config.memory.db_path,
+                node_id=config.node.name,
+                embeddings=embedder,
             )
 
-        # Initialize Mem0 components (for Llama node cross-node search)
+            if config.memory.observation_enabled:
+                self._observation_loop = ObservationLoop(
+                    store=self._memory,
+                    readings=self._readings,
+                    agent=self,
+                    interval_minutes=config.memory.observation_interval_minutes,
+                    lookback_minutes=config.memory.observation_lookback_minutes,
+                    plugins=self._plugin_loader.get_loaded_plugins(),
+                    observation_max_age_days=config.memory.observation_max_age_days,
+                    readings_max_age_days=config.memory.readings_max_age_days,
+                    compact_memory_threshold_mb=config.memory.compact_memory_threshold_mb,
+                    compact_batch_size=config.memory.compact_batch_size,
+                )
+
+        # Initialize Mem0, sync, and discovery (all skipped in edge mode)
         self._mem0_client: Mem0Client | None = None
         self._mem0_bridge: Mem0Bridge | None = None
-        if config.mem0.enabled:
-            self._mem0_client = Mem0Client(config.mem0.server_url)
-            if config.mem0.bridge_enabled:
-                # Bridge requires CRDT log access
+        self._sync_client: SyncClient | None = None
+        self._stop_event = asyncio.Event()
+        self._sync_loop_task: asyncio.Task | None = None
+        self._discovery_manager: DiscoveryManager | None = None
+
+        if not self._is_edge:
+            if config.mem0.enabled:
+                self._mem0_client = Mem0Client(config.mem0.server_url)
+                if config.mem0.bridge_enabled:
+                    crdt_log = CRDTLog(
+                        db_path=config.sync.crdt_db_path,
+                        node_id=config.node.name,
+                    )
+                    self._mem0_bridge = Mem0Bridge(config.mem0, crdt_log)
+
+            if config.sync.enabled:
                 crdt_log = CRDTLog(
                     db_path=config.sync.crdt_db_path,
                     node_id=config.node.name,
                 )
-                self._mem0_bridge = Mem0Bridge(config.mem0, crdt_log)
+                crdt_log.connect()
+                self._sync_client = SyncClient(
+                    crdt_log=crdt_log,
+                    remote_url=config.sync.llama_url if config.sync.llama_url else None,
+                    batch_size=config.sync.batch_size,
+                    max_retries=config.sync.retry_max_attempts,
+                )
 
-        # Initialize sync system if enabled
-        self._sync_client: SyncClient | None = None
-        self._stop_event = asyncio.Event()
-        if config.sync.enabled:
-            crdt_log = CRDTLog(
-                db_path=config.sync.crdt_db_path,
-                node_id=config.node.name,
-            )
-            crdt_log.connect()
-            self._sync_client = SyncClient(
-                crdt_log=crdt_log,
-                remote_url=config.sync.llama_url if config.sync.llama_url else None,
-                batch_size=config.sync.batch_size,
-                max_retries=config.sync.retry_max_attempts,
-            )
+            if config.discovery.enabled:
+                node_type = "llama" if config.mem0.bridge_enabled else "alpaca"
+                self._discovery_manager = DiscoveryManager(
+                    node_name=config.node.name,
+                    node_type=node_type,
+                    port=8080,
+                    service_type=config.discovery.service_type,
+                    announce=config.discovery.announce,
+                    browse=config.discovery.browse,
+                    cache_ttl_seconds=config.discovery.cache_ttl_seconds,
+                )
 
-        self._sync_loop_task: asyncio.Task | None = None
-
-        # Initialize discovery if enabled
-        # Note: Discovery requires dashboard to be running (for port announcement)
-        # This is just initialized here but not started in agent mode
-        self._discovery_manager: DiscoveryManager | None = None
-        if config.discovery.enabled:
-            # Determine node type for announcement
-            node_type = "llama" if config.mem0.bridge_enabled else "alpaca"
-            # Port: default to 8080 (dashboard port)
-            # Note: Agent-only mode won't have a port to announce
-            port = 8080  # TODO: Make configurable
-
-            self._discovery_manager = DiscoveryManager(
-                node_name=config.node.name,
-                node_type=node_type,
-                port=port,
-                service_type=config.discovery.service_type,
-                announce=config.discovery.announce,
-                browse=config.discovery.browse,
-                cache_ttl_seconds=config.discovery.cache_ttl_seconds,
-            )
-
-        # Initialize tool registry with unified reading tools
+        # Initialize tool registry (skipped in edge mode — no LLM to call tools)
         self._tools = ToolRegistry()
-
-        # Reading tools (unified interface)
-        self._tools.register(ReadSourceTool(self._readings))
-        self._tools.register(ListSourcesTool(self._readings))
-        self._tools.register(GetReadingHistoryTool(self._memory))
-
-        # Memory tools
-        self._tools.register(RecallTool(self._memory))
-        self._tools.register(RememberTool(self._memory))
-        self._tools.register(ObserveTool(self._memory))
-
-        # MQTT tools
-        self._tools.register(PublishTool(self._mqtt))
-        self._tools.register(GetRecentMessagesTool(self._mqtt))
-
-        # Mem0 cross-node search tool (only when mem0 enabled)
-        if self._mem0_client:
-            self._tools.register(CrossNodeRecallTool(self._mem0_client))
-
-        # Write plugins (e.g. display devices) loaded from plugin loader
-        for write_plugin in self._plugin_loader.get_write_plugins():
-            for tool in write_plugin.get_tools():
-                self._tools.register(tool)
-
-        # Conversation history for context
         self._system_message = {
             "role": "system",
             "content": config.agent.system_prompt,
         }
+
+        if not self._is_edge:
+            self._tools.register(ReadSourceTool(self._readings))
+            self._tools.register(ListSourcesTool(self._readings))
+            self._tools.register(GetReadingHistoryTool(self._memory))
+            self._tools.register(RecallTool(self._memory))
+            self._tools.register(RememberTool(self._memory))
+            self._tools.register(ObserveTool(self._memory))
+            self._tools.register(PublishTool(self._mqtt))
+            self._tools.register(GetRecentMessagesTool(self._mqtt))
+            if self._mem0_client:
+                self._tools.register(CrossNodeRecallTool(self._mem0_client))
+            for write_plugin in self._plugin_loader.get_write_plugins():
+                for tool in write_plugin.get_tools():
+                    self._tools.register(tool)
 
     async def start(self) -> None:
         """Start the agent."""
@@ -182,9 +166,10 @@ class Agent:
         # Initialize GPIO
         self._gpio.setup()
 
-        # Connect memory store
-        self._memory.connect()
-        logger.info("Memory store connected")
+        # Connect memory store (skipped in edge mode)
+        if self._memory:
+            self._memory.connect()
+            logger.info("Memory store connected")
 
         # Connect to MQTT
         connected = await self._mqtt.connect()
@@ -238,8 +223,10 @@ class Agent:
         self._running = True
         logger.info("Agent started successfully")
 
-        # Run main loop
-        await self._run_loop()
+        if self._is_edge:
+            await self._edge_publish_loop()
+        else:
+            await self._run_loop()
 
     async def stop(self) -> None:
         """Stop the agent."""
@@ -273,7 +260,8 @@ class Agent:
         await self._mqtt.disconnect()
         self._gpio.cleanup()
         self._plugin_loader.shutdown_plugins()
-        self._memory.close()
+        if self._memory:
+            self._memory.close()
 
         logger.info("Agent stopped")
 
@@ -294,12 +282,51 @@ class Agent:
                 logger.error(f"Error in main loop: {e}", exc_info=True)
                 await asyncio.sleep(1)
 
+    async def _edge_publish_loop(self) -> None:
+        """Edge mode loop: collect all plugin readings and publish to MQTT on an interval."""
+        interval = self.config.agent.edge_publish_interval_seconds
+        logger.info(f"Edge publish loop started (interval={interval}s)")
+
+        while self._running:
+            try:
+                readings = await self._readings.read_all()
+                if readings:
+                    payload = json.dumps(
+                        {
+                            "node": self.config.node.name,
+                            "timestamp": time.time(),
+                            "readings": [
+                                {
+                                    "source": r.full_id,
+                                    "value": r.value,
+                                    "unit": r.unit,
+                                    "ts": r.timestamp.isoformat(),
+                                }
+                                for r in readings
+                            ],
+                        },
+                        default=str,
+                    )
+                    await self._mqtt.publish("readings", payload)
+                    logger.debug(f"Published {len(readings)} readings to MQTT")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in edge publish loop: {e}", exc_info=True)
+            await asyncio.sleep(interval)
+
     async def _handle_message(self, message: Message) -> None:
         """Handle an incoming MQTT message.
 
         Args:
             message: The MQTT message to process.
         """
+        # Ignore our own publishes to avoid echo loops
+        own_prefix = self.config.mqtt.topics.publish_prefix
+        if message.topic.startswith(own_prefix + "/"):
+            logger.debug(f"Ignoring own message on {message.topic}")
+            return
+
         logger.info(f"Processing message from {message.topic}: {message.payload[:100]}")
 
         # Build context for LLM
