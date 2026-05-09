@@ -17,9 +17,10 @@ class MQTTBridgeProvider(ReadingProvider):
             {"source": "system:cpu_temp", "value": 45.3, "unit": "celsius", "ts": "..."}
         ]}
 
-    Each cached reading gets source_type="mqtt_edge" and
-    source_id="<node-name>:<original-source>" so readings from multiple
-    nodes are distinct and don't collide.
+    Each Reading uses the node name as source_type and the original source as
+    source_id, so full_id looks like "jeston-nano:system:cpu_temp" rather than
+    "mqtt_edge:jeston-nano:system:cpu_temp". The provider's own source_type
+    ("mqtt_edge") is only used for ReadingManager registration.
 
     The cache is persisted to disk so the dashboard process (separate from
     the agent) can read the latest values without an MQTT connection.
@@ -35,19 +36,19 @@ class MQTTBridgeProvider(ReadingProvider):
         """Parse and cache an edge-node readings list, then persist to disk."""
         for item in raw_readings:
             source = item.get("source", "unknown")
-            source_id = f"{node}:{source}"
+            cache_key = f"{node}:{source}"
             ts_raw = item.get("ts")
             try:
                 ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now()
             except (ValueError, TypeError):
                 ts = datetime.now()
-            self._cache[source_id] = Reading(
-                source_type=self.source_type,
-                source_id=source_id,
+            self._cache[cache_key] = Reading(
+                source_type=node,
+                source_id=source,
                 value=item.get("value"),
                 timestamp=ts,
                 unit=item.get("unit"),
-                metadata={"node": node, "original_source": source},
+                metadata={"node": node},
             )
         self._persist()
 
@@ -55,11 +56,11 @@ class MQTTBridgeProvider(ReadingProvider):
         """Write cache to disk atomically via a temp-file rename."""
         data = {
             sid: {
-                "source_id": r.source_id,
+                "node": r.source_type,
+                "source": r.source_id,
                 "value": r.value,
                 "timestamp": r.timestamp.isoformat(),
                 "unit": r.unit,
-                "metadata": r.metadata,
             }
             for sid, r in self._cache.items()
         }
@@ -81,12 +82,12 @@ class MQTTBridgeProvider(ReadingProvider):
                 except (ValueError, KeyError):
                     ts = datetime.now()
                 readings.append(Reading(
-                    source_type=self.source_type,
-                    source_id=item["source_id"],
+                    source_type=item["node"],
+                    source_id=item["source"],
                     value=item.get("value"),
                     timestamp=ts,
                     unit=item.get("unit"),
-                    metadata=item.get("metadata"),
+                    metadata={"node": item["node"]},
                 ))
             return readings
         except (json.JSONDecodeError, KeyError):
