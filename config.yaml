@@ -36,7 +36,7 @@ plugins:
         max_distance: 4.0
         chip: 0
     led:
-      enabled: true
+      enabled: false
       config:
         pin: 17        # BCM 17 = Pin 11
         active_high: true
