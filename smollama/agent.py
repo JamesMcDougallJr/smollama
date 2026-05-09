@@ -336,7 +336,8 @@ class Agent:
         if message.topic.endswith("/readings"):
             try:
                 data = json.loads(message.payload)
-                node = data.get("node") or message.topic.split("/")[-2]
+                parts = message.topic.split("/")
+                node = parts[-2] if len(parts) >= 3 else data.get("node", "unknown")
                 if isinstance(data.get("readings"), list):
                     self._mqtt_bridge.ingest_edge_payload(node, data["readings"])
             except (json.JSONDecodeError, KeyError, IndexError):
