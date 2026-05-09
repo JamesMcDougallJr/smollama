@@ -136,7 +136,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         from .dashboard import create_app
         from .memory import LocalStore, MockEmbeddings, OllamaEmbeddings
         from .plugins.loader import PluginLoader
-        from .readings import ReadingManager, SystemReadingProvider
+        from .readings import MQTTBridgeProvider, ReadingManager, SystemReadingProvider
         from .discovery import DiscoveryManager
 
         import uvicorn
@@ -179,6 +179,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     # Initialize readings manager
     readings = ReadingManager(plugin_loader=plugin_loader)
     readings.register(SystemReadingProvider())
+    readings.register(MQTTBridgeProvider())
 
     # Optionally add GPIO if configured
     gpio = None

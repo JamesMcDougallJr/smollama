@@ -1,0 +1,112 @@
+"""MQTT edge-node bridge: caches incoming edge readings as a ReadingProvider."""
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+from .base import Reading, ReadingProvider
+
+_DEFAULT_CACHE_PATH = Path.home() / ".smollama" / "mqtt_bridge_cache.json"
+
+
+class MQTTBridgeProvider(ReadingProvider):
+    """ReadingProvider that caches readings received from MQTT edge-node payloads.
+
+    Edge nodes publish JSON in the form:
+        {"node": "edge-01", "timestamp": 1234, "readings": [
+            {"source": "system:cpu_temp", "value": 45.3, "unit": "celsius", "ts": "..."}
+        ]}
+
+    Each cached reading gets source_type="mqtt_edge" and
+    source_id="<node-name>:<original-source>" so readings from multiple
+    nodes are distinct and don't collide.
+
+    The cache is persisted to disk so the dashboard process (separate from
+    the agent) can read the latest values without an MQTT connection.
+    """
+
+    source_type = "mqtt_edge"
+
+    def __init__(self, cache_path: Path = _DEFAULT_CACHE_PATH) -> None:
+        self._cache: dict[str, Reading] = {}
+        self._cache_path = cache_path
+
+    def ingest_edge_payload(self, node: str, raw_readings: list[dict]) -> None:
+        """Parse and cache an edge-node readings list, then persist to disk."""
+        for item in raw_readings:
+            source = item.get("source", "unknown")
+            source_id = f"{node}:{source}"
+            ts_raw = item.get("ts")
+            try:
+                ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now()
+            except (ValueError, TypeError):
+                ts = datetime.now()
+            self._cache[source_id] = Reading(
+                source_type=self.source_type,
+                source_id=source_id,
+                value=item.get("value"),
+                timestamp=ts,
+                unit=item.get("unit"),
+                metadata={"node": node, "original_source": source},
+            )
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write cache to disk atomically via a temp-file rename."""
+        data = {
+            sid: {
+                "source_id": r.source_id,
+                "value": r.value,
+                "timestamp": r.timestamp.isoformat(),
+                "unit": r.unit,
+                "metadata": r.metadata,
+            }
+            for sid, r in self._cache.items()
+        }
+        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._cache_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data))
+        tmp.rename(self._cache_path)
+
+    def _load_from_file(self) -> list[Reading]:
+        """Read cached readings from disk (used by dashboard process)."""
+        if not self._cache_path.exists():
+            return []
+        try:
+            data = json.loads(self._cache_path.read_text())
+            readings = []
+            for item in data.values():
+                try:
+                    ts = datetime.fromisoformat(item["timestamp"])
+                except (ValueError, KeyError):
+                    ts = datetime.now()
+                readings.append(Reading(
+                    source_type=self.source_type,
+                    source_id=item["source_id"],
+                    value=item.get("value"),
+                    timestamp=ts,
+                    unit=item.get("unit"),
+                    metadata=item.get("metadata"),
+                ))
+            return readings
+        except (json.JSONDecodeError, KeyError):
+            return []
+
+    @property
+    def available_sources(self) -> list[str]:
+        if self._cache:
+            return list(self._cache.keys())
+        return [r.source_id for r in self._load_from_file()]
+
+    async def read(self, source_id: str) -> Reading | None:
+        if self._cache:
+            return self._cache.get(source_id)
+        for r in self._load_from_file():
+            if r.source_id == source_id:
+                return r
+        return None
+
+    async def read_all(self) -> list[Reading]:
+        if self._cache:
+            return list(self._cache.values())
+        return self._load_from_file()

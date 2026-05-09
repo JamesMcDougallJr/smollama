@@ -17,7 +17,7 @@ from .ollama_client import (
     format_assistant_tool_calls,
 )
 from .plugins.loader import PluginLoader
-from .readings import GPIOReadingProvider, ReadingManager, SystemReadingProvider
+from .readings import GPIOReadingProvider, MQTTBridgeProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
@@ -60,6 +60,8 @@ class Agent:
         self._readings = ReadingManager(plugin_loader=self._plugin_loader)
         self._readings.register(GPIOReadingProvider(self._gpio))
         self._readings.register(SystemReadingProvider())
+        self._mqtt_bridge = MQTTBridgeProvider()
+        self._readings.register(self._mqtt_bridge)
 
         # Initialize memory system (skipped in edge mode)
         self._memory: LocalStore | None = None
@@ -328,6 +330,17 @@ class Agent:
             return
 
         logger.info(f"Processing message from {message.topic}: {message.payload[:100]}")
+
+        # Ingest edge-node readings into the bridge provider so they appear
+        # in the dashboard and observation loop
+        if message.topic.endswith("/readings"):
+            try:
+                data = json.loads(message.payload)
+                node = data.get("node") or message.topic.split("/")[-2]
+                if isinstance(data.get("readings"), list):
+                    self._mqtt_bridge.ingest_edge_payload(node, data["readings"])
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
 
         # Build context for LLM
         context = (

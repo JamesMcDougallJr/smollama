@@ -2,6 +2,7 @@
 
 from .base import Reading, ReadingManager, ReadingProvider
 from .gpio import GPIOReadingProvider
+from .mqtt_bridge import MQTTBridgeProvider
 from .system import SystemReadingProvider
 
 __all__ = [
@@ -9,5 +10,6 @@ __all__ = [
     "ReadingProvider",
     "ReadingManager",
     "GPIOReadingProvider",
+    "MQTTBridgeProvider",
     "SystemReadingProvider",
 ]
