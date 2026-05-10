@@ -9,15 +9,17 @@
 #   ./scripts/install.sh [OPTIONS]
 #
 # Options:
-#   --minimal            Install only core dependencies (no extras)
+#   --minimal            Install only core dependencies (no extras); skips Ollama
 #   --dev                Install with development dependencies
 #   --all                Install all dependencies (default)
+#   --no-llm             Skip Ollama install and model pulls (edge/sensor nodes)
 #   --help, -h           Show this help message
 #
 # Examples:
 #   ./scripts/install.sh              # Full install with all dependencies
 #   ./scripts/install.sh --dev        # Development mode
-#   ./scripts/install.sh --minimal    # Core only, no extras
+#   ./scripts/install.sh --minimal    # Core only, no extras, no Ollama
+#   ./scripts/install.sh --no-llm     # Full install but skip Ollama
 #
 
 set -euo pipefail
@@ -31,6 +33,7 @@ MQTT_PORT="1883"
 
 # Installation mode
 INSTALL_MODE="all"
+INSTALL_LLM=true
 
 # Set to true when no suitable system Python was found and UV manages Python instead
 UV_PYTHON_MANAGED=false
@@ -92,6 +95,7 @@ parse_args() {
     case $1 in
       --minimal)
         INSTALL_MODE="minimal"
+        INSTALL_LLM=false
         shift
         ;;
       --dev)
@@ -100,6 +104,10 @@ parse_args() {
         ;;
       --all)
         INSTALL_MODE="all"
+        shift
+        ;;
+      --no-llm)
+        INSTALL_LLM=false
         shift
         ;;
       --help|-h)
@@ -857,17 +865,18 @@ main() {
   install_mosquitto "$os_type" "$pkg_manager"
   echo
 
-  # Install Ollama (required dependency)
-  install_ollama "$os_type" "$pkg_manager"
-  echo
-
-  # Pull LLM model
-  pull_ollama_model "gemma4:e2b"
-  echo
-
-  # Pull embedding model (required by memory system)
-  pull_ollama_model "all-minilm:l6-v2"
-  echo
+  # Install Ollama and pull models (skipped for edge/minimal installs)
+  if [[ "$INSTALL_LLM" == true ]]; then
+    install_ollama "$os_type" "$pkg_manager"
+    echo
+    pull_ollama_model "gemma4:e2b"
+    echo
+    pull_ollama_model "all-minilm:l6-v2"
+    echo
+  else
+    info "Skipping Ollama install and model pulls (--no-llm)"
+    echo
+  fi
 
   # Validate installation
   validate_installation
