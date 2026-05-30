@@ -6,15 +6,15 @@
 <div class="space-y-8">
     <!-- Header -->
     <div>
-        <h1 class="text-3xl font-bold text-white">Observations</h1>
-        <p class="mt-2 text-gray-400">LLM-generated insights and detected patterns</p>
+        <h1 class="text-3xl font-bold text-slate-900">Observations</h1>
+        <p class="mt-1 text-slate-500">LLM-generated insights and detected patterns</p>
     </div>
 
     <!-- Filters -->
-    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm space-y-3">
         <!-- Time scrubber -->
         <div id="filter-form" class="flex items-center gap-2 flex-wrap">
-            <span class="text-sm text-gray-400 mr-1">Show:</span>
+            <span class="text-sm text-slate-500 mr-1">Show:</span>
             {% for label, value in [('All', 0), ('7d', 168), ('24h', 24), ('6h', 6), ('1h', 1)] %}
             <button type="button"
                     data-hours="{{ value }}"
@@ -23,8 +23,8 @@
                     hx-include="#filter-form"
                     hx-push-url="true"
                     class="time-preset px-3 py-1 rounded-full text-sm font-medium border transition-colors
-                           {% if hours == value %}bg-blue-600 border-blue-500 text-white
-                           {% else %}bg-gray-700 border-gray-600 text-gray-300 hover:border-blue-500 hover:text-white{% endif %}">
+                           {% if hours == value %}bg-teal-600 border-teal-600 text-white
+                           {% else %}bg-white border-slate-300 text-slate-600 hover:border-teal-400 hover:text-teal-700{% endif %}">
                 {{ label }}
             </button>
             {% endfor %}
@@ -41,7 +41,7 @@
                hx-target="#observations-list"
                hx-include="#filter-form"
                hx-push-url="true"
-               class="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500">
+               class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
     </div>
 
     <script>
@@ -59,19 +59,18 @@
                 window.history.pushState({}, '', url);
             }
 
-            // Preset buttons: update hidden input, toggle active styles, then HTMX fires
             presets.forEach(btn => {
                 btn.addEventListener('htmx:beforeRequest', function() {
                     const val = this.dataset.hours;
                     hoursInput.value = val;
                     presets.forEach(b => {
                         const active = b.dataset.hours === val;
-                        b.classList.toggle('bg-blue-600', active);
-                        b.classList.toggle('border-blue-500', active);
+                        b.classList.toggle('bg-teal-600', active);
+                        b.classList.toggle('border-teal-600', active);
                         b.classList.toggle('text-white', active);
-                        b.classList.toggle('bg-gray-700', !active);
-                        b.classList.toggle('border-gray-600', !active);
-                        b.classList.toggle('text-gray-300', !active);
+                        b.classList.toggle('bg-white', !active);
+                        b.classList.toggle('border-slate-300', !active);
+                        b.classList.toggle('text-slate-600', !active);
                     });
                     syncUrl();
                 });
@@ -82,43 +81,46 @@
     </script>
 
     <!-- Observations List -->
-    <div id="observations-list" class="space-y-4">
+    <div id="observations-list" class="space-y-3">
         {% if observations %}
             {% for obs in observations %}
-            <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+            <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
                 <div class="flex items-start justify-between">
                     <div class="flex-1">
-                        <p class="text-white">{{ obs.text }}</p>
-                        <div class="mt-3 flex items-center space-x-4 text-sm text-gray-400">
+                        <p class="text-slate-900">{{ obs.text }}</p>
+                        <div class="mt-3 flex items-center flex-wrap gap-3 text-sm text-slate-500">
                             <span>{{ obs.timestamp }}</span>
-                            <span class="px-2 py-0.5 rounded
-                                {% if obs.type == 'anomaly' %}bg-red-900 text-red-200
-                                {% elif obs.type == 'pattern' %}bg-purple-900 text-purple-200
-                                {% elif obs.type == 'status' %}bg-green-900 text-green-200
-                                {% else %}bg-gray-700 text-gray-300{% endif %}">
+                            <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                                {% if obs.type == 'anomaly' %}bg-red-100 text-red-700
+                                {% elif obs.type == 'pattern' %}bg-purple-100 text-purple-700
+                                {% elif obs.type == 'status' %}bg-teal-100 text-teal-700
+                                {% else %}bg-slate-100 text-slate-600{% endif %}">
                                 {{ obs.type }}
                             </span>
-                            <span>Confidence: {{ (obs.confidence * 100)|int }}%</span>
+                            <span>{{ (obs.confidence * 100)|int }}% confidence</span>
                         </div>
                     </div>
                     {% if obs.similarity %}
-                    <div class="ml-4 text-sm text-gray-500">
-                        {{ (obs.similarity * 100)|int }}% match
+                    <div class="ml-4 shrink-0">
+                        <span class="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
+                            {{ (obs.similarity * 100)|int }}% match
+                        </span>
                     </div>
                     {% endif %}
                 </div>
                 {% if obs.related_sources %}
                 <div class="mt-3 flex flex-wrap gap-2">
                     {% for source in obs.related_sources %}
-                    <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ source }}</span>
+                    <span class="px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-500">{{ source }}</span>
                     {% endfor %}
                 </div>
                 {% endif %}
             </div>
             {% endfor %}
         {% else %}
-            <div class="text-center text-gray-500 py-8">
-                <p>No observations yet</p>
+            <div class="text-center text-slate-400 py-12">
+                <p class="text-lg">No observations yet</p>
+                <p class="mt-1 text-sm">The agent will generate observations as it monitors your system</p>
             </div>
         {% endif %}
     </div>

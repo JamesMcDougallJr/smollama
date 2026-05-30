@@ -1,9 +1,9 @@
 <!-- Sparkline visualization for 24h sensor history -->
 {% if history and history|length > 1 %}
-<div class="mt-3 pt-3 border-t border-gray-700">
+<div class="mt-3 pt-3 border-t border-slate-100">
     <div class="flex items-center justify-between mb-2">
-        <span class="text-xs text-gray-500">24h trend</span>
-        <span class="text-xs text-gray-500">{{ history|length }} samples</span>
+        <span class="text-xs text-slate-400">24h trend</span>
+        <span class="text-xs text-slate-400">{{ history|length }} samples</span>
     </div>
     <canvas id="sparkline-{{ full_id|replace(':', '-')|replace('.', '-') }}"
             width="280"
@@ -39,7 +39,7 @@
 
     // Draw line
     ctx.beginPath();
-    ctx.strokeStyle = '#10b981';  // green-500
+    ctx.strokeStyle = '#0d9488';  // teal-600
     ctx.lineWidth = 2;
 
     values.forEach((value, i) => {
@@ -57,7 +57,7 @@
     ctx.stroke();
 
     // Draw dots at endpoints
-    ctx.fillStyle = '#10b981';
+    ctx.fillStyle = '#0d9488';  // teal-600
     const firstX = padding;
     const firstY = height - padding - ((values[0] - min) / range * plotHeight);
     const lastX = width - padding;
@@ -73,7 +73,7 @@
 })();
 </script>
 {% elif history and history|length == 1 %}
-<div class="mt-3 pt-3 border-t border-gray-700">
-    <span class="text-xs text-gray-500">Insufficient data for trend</span>
+<div class="mt-3 pt-3 border-t border-slate-100">
+    <span class="text-xs text-slate-400">Insufficient data for trend</span>
 </div>
 {% endif %}

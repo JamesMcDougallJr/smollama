@@ -3,7 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Smollama{% endblock %} - {{ node_name }}</title>
+    <title>{% block title %}smollama{% endblock %} · {{ node_name }}</title>
+
+    <!-- Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- Tailwind CSS from CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -12,7 +17,9 @@
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 
     <style>
-        /* Custom styles */
+        body { font-family: 'Inter', sans-serif; }
+
+        /* HTMX loading indicator */
         .htmx-indicator {
             opacity: 0;
             transition: opacity 200ms ease-in;
@@ -30,49 +37,65 @@
             bottom: 20px;
             right: 20px;
             z-index: 1000;
-            padding: 12px 20px;
+            padding: 10px 18px;
             border-radius: 8px;
-            background: #1f2937;
-            border: 1px solid #374151;
-            color: #f3f4f6;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            color: #0f172a;
             cursor: pointer;
-            font-size: 14px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
             transition: all 0.2s;
         }
         .refresh-toggle:hover {
-            background: #374151;
-            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.4);
+            background: #f8fafc;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
         }
         .refresh-toggle.paused {
-            background: #7c2d12;
-            border-color: #ea580c;
+            background: #fffbeb;
+            border-color: #f59e0b;
+            color: #92400e;
         }
         .refresh-toggle.paused:hover {
-            background: #9a3412;
+            background: #fef3c7;
         }
     </style>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen">
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
     <!-- Navigation -->
-    <nav class="bg-gray-800 border-b border-gray-700">
+    <nav class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex items-center justify-between h-16">
-                <div class="flex items-center">
-                    <span class="text-xl font-bold text-green-400">🦙 {{ node_name }}</span>
-                    <div class="ml-6" hx-get="/htmx/gpio-toggle" hx-trigger="load" hx-swap="innerHTML"></div>
+                <!-- Wordmark + node badge -->
+                <div class="flex items-center gap-3">
+                    <a href="/" class="flex items-center gap-2">
+                        <span class="text-lg">🦙</span>
+                        <span class="text-xl font-bold text-teal-400 tracking-tight">smollama</span>
+                    </a>
+                    <span class="hidden sm:inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-300">
+                        {{ node_name }}
+                    </span>
+                    <div class="ml-2" hx-get="/htmx/gpio-toggle" hx-trigger="load" hx-swap="innerHTML"></div>
                 </div>
-                <div class="flex space-x-4">
-                    <a href="/" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'index' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+
+                <!-- Nav links -->
+                <div class="flex items-center space-x-1">
+                    <a href="/" class="px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                        {% if page == 'index' %}bg-teal-600 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                         Dashboard
                     </a>
-                    <a href="/readings" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'readings' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                    <a href="/readings" class="px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                        {% if page == 'readings' %}bg-teal-600 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                         Readings
                     </a>
-                    <a href="/observations" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'observations' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                    <a href="/observations" class="px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                        {% if page == 'observations' %}bg-teal-600 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                         Observations
                     </a>
-                    <a href="/memories" class="px-3 py-2 rounded-md text-sm font-medium {% if page == 'memories' %}bg-gray-900 text-white{% else %}text-gray-300 hover:bg-gray-700{% endif %}">
+                    <a href="/memories" class="px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                        {% if page == 'memories' %}bg-teal-600 text-white{% else %}text-slate-300 hover:bg-slate-800 hover:text-white{% endif %}">
                         Memories
                     </a>
                 </div>
@@ -81,30 +104,28 @@
     </nav>
 
     <!-- Main Content -->
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {% block content %}{% endblock %}
     </main>
 
     <!-- Footer -->
-    <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
-        <div class="max-w-7xl mx-auto px-4 py-4 text-center text-gray-500 text-sm">
-            Smollama Dashboard • Running on {{ node_name }}
+    <footer class="bg-slate-900 border-t border-slate-800 mt-auto">
+        <div class="max-w-7xl mx-auto px-4 py-4 text-center text-slate-500 text-sm">
+            smollama · running on <span class="text-slate-400 font-medium">{{ node_name }}</span>
         </div>
     </footer>
 
     <!-- Auto-refresh toggle button -->
     <button id="refresh-toggle" class="refresh-toggle" onclick="toggleAutoRefresh()">
-        <span id="refresh-icon">⏸️</span> <span id="refresh-text">Pause</span>
+        <span id="refresh-icon">⏸</span> <span id="refresh-text">Pause</span>
     </button>
 
     <script>
-        // Auto-refresh toggle functionality
         const STORAGE_KEY = 'smollama_auto_refresh';
 
         function toggleAutoRefresh() {
             const currentState = localStorage.getItem(STORAGE_KEY) !== 'paused';
-            const newState = currentState ? 'paused' : 'active';
-            localStorage.setItem(STORAGE_KEY, newState);
+            localStorage.setItem(STORAGE_KEY, currentState ? 'paused' : 'active');
             updateRefreshState();
         }
 
@@ -117,24 +138,19 @@
             if (isPaused) {
                 document.body.classList.add('refresh-paused');
                 button.classList.add('paused');
-                icon.textContent = '▶️';
+                icon.textContent = '▶';
                 text.textContent = 'Resume';
             } else {
                 document.body.classList.remove('refresh-paused');
                 button.classList.remove('paused');
-                icon.textContent = '⏸️';
+                icon.textContent = '⏸';
                 text.textContent = 'Pause';
             }
         }
 
-        // Initialize state on page load
         document.addEventListener('DOMContentLoaded', updateRefreshState);
-
-        // Listen for storage changes from other tabs
         window.addEventListener('storage', function(e) {
-            if (e.key === STORAGE_KEY) {
-                updateRefreshState();
-            }
+            if (e.key === STORAGE_KEY) updateRefreshState();
         });
     </script>
 </body>

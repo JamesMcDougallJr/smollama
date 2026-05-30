@@ -6,54 +6,63 @@
 <div class="space-y-8">
     <!-- Header -->
     <div>
-        <h1 class="text-3xl font-bold text-white">Dashboard</h1>
-        <p class="mt-2 text-gray-400">Overview of {{ node_name }}</p>
+        <h1 class="text-3xl font-bold text-slate-900">Dashboard</h1>
+        <p class="mt-1 text-slate-500">Overview of {{ node_name }}</p>
     </div>
 
     <!-- Stats Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"
          hx-get="/htmx/stats"
          hx-trigger="load, every 10s [!document.body.classList.contains('refresh-paused')]"
          hx-swap="innerHTML">
         {% if stats %}
-        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <dt class="text-sm font-medium text-gray-400">Readings</dt>
-            <dd class="mt-2 text-3xl font-semibold text-green-400">{{ stats.readings_count }}</dd>
+        <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <dt class="text-sm font-medium text-slate-500">Readings</dt>
+            <dd class="mt-2 text-3xl font-semibold text-teal-600">{{ stats.readings_count }}</dd>
         </div>
-        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <dt class="text-sm font-medium text-gray-400">Observations</dt>
-            <dd class="mt-2 text-3xl font-semibold text-blue-400">{{ stats.observations_count }}</dd>
+        <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <dt class="text-sm font-medium text-slate-500">Observations</dt>
+            <dd class="mt-2 text-3xl font-semibold text-blue-600">{{ stats.observations_count }}</dd>
         </div>
-        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <dt class="text-sm font-medium text-gray-400">Memories</dt>
-            <dd class="mt-2 text-3xl font-semibold text-purple-400">{{ stats.memories_count }}</dd>
+        <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <dt class="text-sm font-medium text-slate-500">Memories</dt>
+            <dd class="mt-2 text-3xl font-semibold text-purple-600">{{ stats.memories_count }}</dd>
         </div>
-        <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-            <dt class="text-sm font-medium text-gray-400">Vector Search</dt>
-            <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-green-400{% else %}text-yellow-400{% endif %}">
+        <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+            <dt class="text-sm font-medium text-slate-500">Vector Search</dt>
+            <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-teal-600{% else %}text-amber-500{% endif %}">
                 {{ 'Enabled' if stats.vector_search_enabled else 'Disabled' }}
             </dd>
         </div>
         {% else %}
-        <div class="col-span-4 text-center text-gray-500 py-8">
+        <div class="col-span-4 text-center text-slate-400 py-8">
             <p>No memory store connected</p>
         </div>
         {% endif %}
     </div>
 
     <!-- Quick Links -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <a href="/readings" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-green-500 transition-colors">
-            <h3 class="text-lg font-semibold text-white">Live Readings</h3>
-            <p class="mt-2 text-gray-400">View current sensor values and system metrics</p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <a href="/readings" class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm hover:border-teal-400 hover:shadow-md transition-all group">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-9 h-9 rounded-lg bg-teal-50 flex items-center justify-center text-lg">📡</div>
+                <h3 class="text-base font-semibold text-slate-900">Live Readings</h3>
+            </div>
+            <p class="text-sm text-slate-500">Current sensor values and system metrics</p>
         </a>
-        <a href="/observations" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-blue-500 transition-colors">
-            <h3 class="text-lg font-semibold text-white">Observations</h3>
-            <p class="mt-2 text-gray-400">Browse LLM-generated insights and patterns</p>
+        <a href="/observations" class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm hover:border-blue-400 hover:shadow-md transition-all group">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-lg">🔍</div>
+                <h3 class="text-base font-semibold text-slate-900">Observations</h3>
+            </div>
+            <p class="text-sm text-slate-500">LLM-generated insights and patterns</p>
         </a>
-        <a href="/memories" class="bg-gray-800 rounded-lg p-6 border border-gray-700 hover:border-purple-500 transition-colors">
-            <h3 class="text-lg font-semibold text-white">Memories</h3>
-            <p class="mt-2 text-gray-400">Explore persistent facts and learned information</p>
+        <a href="/memories" class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm hover:border-purple-400 hover:shadow-md transition-all group">
+            <div class="flex items-center gap-3 mb-3">
+                <div class="w-9 h-9 rounded-lg bg-purple-50 flex items-center justify-center text-lg">🧠</div>
+                <h3 class="text-base font-semibold text-slate-900">Memories</h3>
+            </div>
+            <p class="text-sm text-slate-500">Persistent facts and learned information</p>
         </a>
     </div>
 </div>

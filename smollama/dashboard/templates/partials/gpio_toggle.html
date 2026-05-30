@@ -1,22 +1,22 @@
 <div id="gpio-toggle" class="flex items-center gap-2">
 {% if not has_gpio %}
-    <span class="text-xs text-gray-500">No GPIO</span>
+    <span class="text-xs text-slate-500">No GPIO</span>
 {% else %}
     {% if mock_mode %}
-        <span class="inline-block w-2 h-2 rounded-full bg-yellow-400"></span>
-        <span class="text-xs text-yellow-300">Mock GPIO</span>
+        <span class="inline-block w-2 h-2 rounded-full bg-amber-400"></span>
+        <span class="text-xs text-amber-300">Mock GPIO</span>
     {% else %}
-        <span class="inline-block w-2 h-2 rounded-full bg-green-400"></span>
-        <span class="text-xs text-green-300">Live GPIO</span>
+        <span class="inline-block w-2 h-2 rounded-full bg-teal-400"></span>
+        <span class="text-xs text-teal-300">Live GPIO</span>
     {% endif %}
 
     {% if not gpio_available and mock_mode %}
         <span class="relative group">
             <button disabled
-                class="relative inline-flex h-5 w-9 items-center rounded-full bg-gray-600 cursor-not-allowed opacity-50">
-                <span class="inline-block h-3 w-3 transform rounded-full bg-gray-400 transition translate-x-1"></span>
+                class="relative inline-flex h-5 w-9 items-center rounded-full bg-slate-600 cursor-not-allowed opacity-50">
+                <span class="inline-block h-3 w-3 transform rounded-full bg-slate-400 transition translate-x-1"></span>
             </button>
-            <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs text-gray-300 bg-gray-700 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+            <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-1 text-xs text-slate-200 bg-slate-700 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                 RPi.GPIO not available
             </span>
         </span>
@@ -24,7 +24,7 @@
         <form hx-post="/api/gpio/mode" hx-target="#gpio-toggle" hx-swap="outerHTML" class="inline">
             <input type="hidden" name="mock" value="false">
             <button type="submit"
-                class="relative inline-flex h-5 w-9 items-center rounded-full bg-yellow-600 hover:bg-yellow-500 transition-colors cursor-pointer">
+                class="relative inline-flex h-5 w-9 items-center rounded-full bg-amber-500 hover:bg-amber-400 transition-colors cursor-pointer">
                 <span class="inline-block h-3 w-3 transform rounded-full bg-white transition translate-x-1"></span>
             </button>
         </form>
@@ -32,7 +32,7 @@
         <form hx-post="/api/gpio/mode" hx-target="#gpio-toggle" hx-swap="outerHTML" class="inline">
             <input type="hidden" name="mock" value="true">
             <button type="submit"
-                class="relative inline-flex h-5 w-9 items-center rounded-full bg-green-600 hover:bg-green-500 transition-colors cursor-pointer">
+                class="relative inline-flex h-5 w-9 items-center rounded-full bg-teal-500 hover:bg-teal-400 transition-colors cursor-pointer">
                 <span class="inline-block h-3 w-3 transform rounded-full bg-white transition translate-x-5"></span>
             </button>
         </form>

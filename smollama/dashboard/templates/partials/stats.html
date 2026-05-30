@@ -1,24 +1,24 @@
 {% if stats %}
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-    <dt class="text-sm font-medium text-gray-400">Readings</dt>
-    <dd class="mt-2 text-3xl font-semibold text-green-400">{{ stats.readings_count }}</dd>
+<div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <dt class="text-sm font-medium text-slate-500">Readings</dt>
+    <dd class="mt-2 text-3xl font-semibold text-teal-600">{{ stats.readings_count }}</dd>
 </div>
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-    <dt class="text-sm font-medium text-gray-400">Observations</dt>
-    <dd class="mt-2 text-3xl font-semibold text-blue-400">{{ stats.observations_count }}</dd>
+<div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <dt class="text-sm font-medium text-slate-500">Observations</dt>
+    <dd class="mt-2 text-3xl font-semibold text-blue-600">{{ stats.observations_count }}</dd>
 </div>
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-    <dt class="text-sm font-medium text-gray-400">Memories</dt>
-    <dd class="mt-2 text-3xl font-semibold text-purple-400">{{ stats.memories_count }}</dd>
+<div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <dt class="text-sm font-medium text-slate-500">Memories</dt>
+    <dd class="mt-2 text-3xl font-semibold text-purple-600">{{ stats.memories_count }}</dd>
 </div>
-<div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
-    <dt class="text-sm font-medium text-gray-400">Vector Search</dt>
-    <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-green-400{% else %}text-yellow-400{% endif %}">
+<div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <dt class="text-sm font-medium text-slate-500">Vector Search</dt>
+    <dd class="mt-2 text-3xl font-semibold {% if stats.vector_search_enabled %}text-teal-600{% else %}text-amber-500{% endif %}">
         {{ 'Enabled' if stats.vector_search_enabled else 'Disabled' }}
     </dd>
 </div>
 {% else %}
-<div class="col-span-4 text-center text-gray-500 py-8">
+<div class="col-span-4 text-center text-slate-400 py-8">
     <p>No stats available</p>
 </div>
 {% endif %}

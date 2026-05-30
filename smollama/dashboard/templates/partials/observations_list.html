@@ -1,38 +1,40 @@
 {% if observations %}
     {% for obs in observations %}
-    <div class="bg-gray-800 rounded-lg p-6 border border-gray-700">
+    <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
         <div class="flex items-start justify-between">
             <div class="flex-1">
-                <p class="text-white">{{ obs.text }}</p>
-                <div class="mt-3 flex items-center space-x-4 text-sm text-gray-400">
+                <p class="text-slate-900">{{ obs.text }}</p>
+                <div class="mt-3 flex items-center flex-wrap gap-3 text-sm text-slate-500">
                     <span>{{ obs.timestamp }}</span>
-                    <span class="px-2 py-0.5 rounded
-                        {% if obs.type == 'anomaly' %}bg-red-900 text-red-200
-                        {% elif obs.type == 'pattern' %}bg-purple-900 text-purple-200
-                        {% elif obs.type == 'status' %}bg-green-900 text-green-200
-                        {% else %}bg-gray-700 text-gray-300{% endif %}">
+                    <span class="px-2 py-0.5 rounded-full text-xs font-medium
+                        {% if obs.type == 'anomaly' %}bg-red-100 text-red-700
+                        {% elif obs.type == 'pattern' %}bg-purple-100 text-purple-700
+                        {% elif obs.type == 'status' %}bg-teal-100 text-teal-700
+                        {% else %}bg-slate-100 text-slate-600{% endif %}">
                         {{ obs.type }}
                     </span>
-                    <span>Confidence: {{ (obs.confidence * 100)|int }}%</span>
+                    <span>{{ (obs.confidence * 100)|int }}% confidence</span>
                 </div>
             </div>
             {% if obs.similarity %}
-            <div class="ml-4 text-sm text-gray-500">
-                {{ (obs.similarity * 100)|int }}% match
+            <div class="ml-4 shrink-0">
+                <span class="text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-full">
+                    {{ (obs.similarity * 100)|int }}% match
+                </span>
             </div>
             {% endif %}
         </div>
         {% if obs.related_sources %}
         <div class="mt-3 flex flex-wrap gap-2">
             {% for source in obs.related_sources %}
-            <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ source }}</span>
+            <span class="px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-500">{{ source }}</span>
             {% endfor %}
         </div>
         {% endif %}
     </div>
     {% endfor %}
 {% else %}
-    <div class="text-center text-gray-500 py-8">
+    <div class="text-center text-slate-400 py-12">
         <p>No observations found</p>
     </div>
 {% endif %}
