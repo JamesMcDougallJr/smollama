@@ -61,7 +61,6 @@ def create_app(
     async def index(request: Request):
         """Main dashboard page."""
         context = {
-            "request": request,
             "node_name": config.node.name,
             "page": "index",
         }
@@ -70,13 +69,12 @@ def create_app(
         if store:
             context["stats"] = store.get_stats()
 
-        return templates.TemplateResponse("index.html", context)
+        return templates.TemplateResponse(request, "index.html", context)
 
     @app.get("/readings", response_class=HTMLResponse)
     async def readings_page(request: Request):
         """Live readings page."""
         context = {
-            "request": request,
             "node_name": config.node.name,
             "page": "readings",
         }
@@ -99,7 +97,7 @@ def create_app(
                 context["readings"] = []
                 context["error"] = str(e)
 
-        return templates.TemplateResponse("readings.html", context)
+        return templates.TemplateResponse(request, "readings.html", context)
 
     @app.get("/observations", response_class=HTMLResponse)
     async def observations_page(request: Request, hours: int = 0, query: str = ""):
@@ -109,7 +107,6 @@ def create_app(
             from_ts = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         context = {
-            "request": request,
             "node_name": config.node.name,
             "page": "observations",
             "query": query,
@@ -119,13 +116,12 @@ def create_app(
         if store:
             context["observations"] = store.search_observations("", limit=50, from_ts=from_ts)
 
-        return templates.TemplateResponse("observations.html", context)
+        return templates.TemplateResponse(request, "observations.html", context)
 
     @app.get("/memories", response_class=HTMLResponse)
     async def memories_page(request: Request):
         """Memory browser page."""
         context = {
-            "request": request,
             "node_name": config.node.name,
             "page": "memories",
         }
@@ -133,7 +129,7 @@ def create_app(
         if store:
             context["memories"] = store.search_memories("", limit=50)
 
-        return templates.TemplateResponse("memories.html", context)
+        return templates.TemplateResponse(request, "memories.html", context)
 
     # ==================== API Routes (JSON) ====================
 
@@ -283,8 +279,9 @@ def create_app(
 
         gpio_mock = gpio_reader.is_mock_mode if gpio_reader else True
         return templates.TemplateResponse(
+            request,
             "partials/readings_list.html",
-            {"request": request, "readings": current_readings, "gpio_mock": gpio_mock},
+            {"readings": current_readings, "gpio_mock": gpio_mock},
         )
 
     @app.get("/htmx/observations", response_class=HTMLResponse)
@@ -299,8 +296,9 @@ def create_app(
             observations = store.search_observations(query, limit=50, from_ts=from_ts)
 
         return templates.TemplateResponse(
+            request,
             "partials/observations_list.html",
-            {"request": request, "observations": observations},
+            {"observations": observations},
         )
 
     @app.get("/htmx/memories", response_class=HTMLResponse)
@@ -308,8 +306,9 @@ def create_app(
         """HTMX partial for memories list."""
         memories = store.search_memories(query, limit=20) if store else []
         return templates.TemplateResponse(
+            request,
             "partials/memories_list.html",
-            {"request": request, "memories": memories},
+            {"memories": memories},
         )
 
     @app.get("/htmx/gpio-toggle", response_class=HTMLResponse)
@@ -318,9 +317,9 @@ def create_app(
         has_gpio = gpio_reader is not None and len(gpio_reader.configured_pins) > 0
         mock_mode = gpio_reader.is_mock_mode if gpio_reader else True
         return templates.TemplateResponse(
+            request,
             "partials/gpio_toggle.html",
             {
-                "request": request,
                 "has_gpio": has_gpio,
                 "mock_mode": mock_mode,
                 "gpio_available": GPIO_AVAILABLE,
@@ -346,9 +345,9 @@ def create_app(
             error = "No GPIO reader configured"
 
         return templates.TemplateResponse(
+            request,
             "partials/gpio_toggle.html",
             {
-                "request": request,
                 "has_gpio": has_gpio,
                 "mock_mode": mock_mode,
                 "gpio_available": GPIO_AVAILABLE,
@@ -364,8 +363,9 @@ def create_app(
             stats = store.get_stats()
 
         return templates.TemplateResponse(
+            request,
             "partials/stats.html",
-            {"request": request, "stats": stats},
+            {"stats": stats},
         )
 
     return app
