@@ -521,6 +521,39 @@ class LocalStore:
 
         return results
 
+    def get_observations_since_id(
+        self,
+        last_id: int = 0,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return observations with id > last_id, ordered by id ASC.
+
+        Used by Mem0Bridge to poll for new local observations to index.
+        """
+        conn = self._ensure_connected()
+        cursor = conn.execute(
+            """
+            SELECT id, timestamp, text, confidence, observation_type, related_sources, node_id
+            FROM observations
+            WHERE id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (last_id, limit),
+        )
+        results = []
+        for row in cursor:
+            results.append({
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "text": row["text"],
+                "confidence": row["confidence"],
+                "type": row["observation_type"],
+                "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
+                "node_id": row["node_id"],
+            })
+        return results
+
     # ==================== Memory Operations ====================
 
     def add_memory(
@@ -683,6 +716,38 @@ class LocalStore:
                 "similarity": 0.5,
             })
 
+        return results
+
+    def get_memories_since_id(
+        self,
+        last_id: int = 0,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Return memories with id > last_id, ordered by id ASC.
+
+        Used by Mem0Bridge to poll for new local memories to index.
+        """
+        conn = self._ensure_connected()
+        cursor = conn.execute(
+            """
+            SELECT id, text, confidence, times_confirmed, created_at, node_id
+            FROM memories
+            WHERE id > ? AND active = 1
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (last_id, limit),
+        )
+        results = []
+        for row in cursor:
+            results.append({
+                "id": row["id"],
+                "text": row["text"],
+                "confidence": row["confidence"],
+                "times_confirmed": row["times_confirmed"],
+                "created_at": row["created_at"],
+                "node_id": row["node_id"],
+            })
         return results
 
     def deactivate_memory(self, memory_id: int) -> bool:

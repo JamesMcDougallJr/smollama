@@ -112,7 +112,9 @@ class Agent:
                         db_path=config.sync.crdt_db_path,
                         node_id=config.node.name,
                     )
-                    self._mem0_bridge = Mem0Bridge(config.mem0, crdt_log)
+                    self._mem0_bridge = Mem0Bridge(
+                        config.mem0, crdt_log, local_store=self._memory
+                    )
 
             if config.sync.enabled:
                 crdt_log = CRDTLog(
