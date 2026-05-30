@@ -170,9 +170,20 @@ install_pi_system_deps() {
   info "Installing Raspberry Pi system dependencies..."
 
   sudo apt-get update -qq
-  sudo apt-get install -y -qq \
-    build-essential \
-    libgpiod2
+  sudo apt-get install -y -qq build-essential
+
+  # libgpiod2 was renamed to libgpiod2t64 in Debian 12 / Pi OS Bookworm
+  local installed_gpiod=false
+  for pkg in libgpiod2 libgpiod2t64; do
+    if apt-cache show "$pkg" &>/dev/null 2>&1; then
+      sudo apt-get install -y -qq "$pkg"
+      installed_gpiod=true
+      break
+    fi
+  done
+  if [[ "$installed_gpiod" == false ]]; then
+    warn "libgpiod2 not found in apt; GPIO will rely on lgpio/RPi.GPIO (fine on Pi 5)"
+  fi
 
   success "Pi system dependencies installed"
 }
@@ -322,8 +333,8 @@ install_uv() {
 
   # Try official installer first
   if curl -LsSf https://astral.sh/uv/install.sh | sh; then
-    # Add to PATH for current session
-    export PATH="$HOME/.cargo/bin:$PATH"
+    # uv installs to ~/.local/bin (not ~/.cargo/bin); add both for safety
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
     success "UV installed successfully"
     return 0
   else
@@ -597,8 +608,17 @@ pull_ollama_model() {
 #
 
 check_mosquitto() {
-  if nc -z localhost "$MQTT_PORT" 2>/dev/null; then
-    return 0
+  if command -v nc &> /dev/null; then
+    nc -z localhost "$MQTT_PORT" 2>/dev/null && return 0
+  fi
+  if command -v timeout &> /dev/null; then
+    timeout 1 bash -c "cat < /dev/null > /dev/tcp/localhost/$MQTT_PORT" 2>/dev/null && return 0
+  fi
+  if command -v ss &> /dev/null; then
+    ss -ln | grep -q ":$MQTT_PORT " && return 0
+  fi
+  if command -v lsof &> /dev/null; then
+    lsof -i ":$MQTT_PORT" &> /dev/null && return 0
   fi
   return 1
 }
@@ -648,6 +668,15 @@ install_mosquitto() {
     apt)
       sudo apt-get update
       sudo apt-get install -y mosquitto mosquitto-clients
+      # mosquitto 1.6+ defaults to rejecting anonymous connections; configure for local use
+      local mqtt_conf="/etc/mosquitto/conf.d/smollama.conf"
+      if [[ ! -f "$mqtt_conf" ]]; then
+        info "Configuring Mosquitto for local anonymous access..."
+        sudo tee "$mqtt_conf" > /dev/null <<'EOF'
+listener 1883 0.0.0.0
+allow_anonymous true
+EOF
+      fi
       sudo systemctl enable mosquitto
       sudo systemctl start mosquitto
       ;;

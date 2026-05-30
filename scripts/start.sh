@@ -335,7 +335,7 @@ start_mosquitto() {
   mkdir -p "$TMP_DIR"
   info "Starting Mosquitto manually..."
 
-  mosquitto -d -p "$MQTT_PORT" > "$TMP_DIR/mosquitto.log" 2>&1 &
+  nohup mosquitto -p "$MQTT_PORT" > "$TMP_DIR/mosquitto.log" 2>&1 &
   MOSQUITTO_PID=$!
   STARTED_MOSQUITTO=true
 
