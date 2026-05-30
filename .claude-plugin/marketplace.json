@@ -1,0 +1,48 @@
+{
+  "name": "smollama",
+  "owner": {
+    "name": "James"
+  },
+  "metadata": {
+    "description": "Claude Code skills for smollama — a local AI assistant running on Raspberry Pi with Ollama. Includes Pi-specific skills for GPIO, memory management, and ARM architecture.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "rpi-gpio",
+      "source": "./.claude/skills/rpi-gpio",
+      "description": "GPIO, I2C, SPI, UART, PWM, sensor wiring, and adding hardware devices to smollama on Raspberry Pi.",
+      "version": "0.1.0",
+      "author": {
+        "name": "James"
+      },
+      "license": "MIT",
+      "keywords": ["raspberry-pi", "gpio", "i2c", "spi", "sensors", "hardware"],
+      "category": "development"
+    },
+    {
+      "name": "rpi-memory",
+      "source": "./.claude/skills/rpi-memory",
+      "description": "OOM errors, swap configuration, model selection for limited RAM, and memory optimization on Raspberry Pi.",
+      "version": "0.1.0",
+      "author": {
+        "name": "James"
+      },
+      "license": "MIT",
+      "keywords": ["raspberry-pi", "memory", "oom", "swap", "ollama", "optimization"],
+      "category": "development"
+    },
+    {
+      "name": "rpi-arch",
+      "source": "./.claude/skills/rpi-arch",
+      "description": "ARM compatibility, package installation failures, Pi OS versions, throttling, and platform differences from x86.",
+      "version": "0.1.0",
+      "author": {
+        "name": "James"
+      },
+      "license": "MIT",
+      "keywords": ["raspberry-pi", "arm", "architecture", "compatibility", "packages"],
+      "category": "development"
+    }
+  ]
+}
