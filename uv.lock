@@ -1141,7 +1141,7 @@ requires-dist = [
     { name = "rpi-gpio", marker = "extra == 'pi'" },
     { name = "rplcd", marker = "extra == 'pi'", specifier = ">=1.3" },
     { name = "smbus2", marker = "extra == 'pi'", specifier = ">=0.6.1" },
-    { name = "sqlite-vec", marker = "extra == 'all'", specifier = ">=0.1.0" },
+    { name = "sqlite-vec", marker = "extra == 'all'", specifier = ">=0.1.7" },
     { name = "sqlite-vec", marker = "extra == 'memory'", specifier = ">=0.1.7" },
     { name = "uvicorn", marker = "extra == 'all'", specifier = ">=0.23.0" },
     { name = "uvicorn", marker = "extra == 'dashboard'", specifier = ">=0.23.0" },

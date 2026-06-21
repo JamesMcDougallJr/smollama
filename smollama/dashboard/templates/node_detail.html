@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}{{ detail_node }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Back link + header -->
+    <div>
+        <a href="/readings" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-teal-600 transition-colors mb-4">
+            ← Back to Readings
+        </a>
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <h1 class="text-3xl font-bold text-slate-900">{{ detail_node }}</h1>
+                {% if status == 'active' %}
+                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-emerald-100 text-emerald-700">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Active
+                </span>
+                {% elif status == 'stale' %}
+                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-amber-100 text-amber-700">
+                    <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+                    Stale
+                </span>
+                {% else %}
+                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium bg-slate-100 text-slate-500">
+                    <span class="w-2 h-2 rounded-full bg-slate-300"></span>
+                    Offline
+                </span>
+                {% endif %}
+                {% if is_local %}
+                <span class="px-2 py-1 text-xs rounded-full bg-teal-100 text-teal-700 font-medium">This node</span>
+                {% endif %}
+            </div>
+            <div class="htmx-indicator">
+                <svg class="animate-spin h-5 w-5 text-teal-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+        </div>
+        <p class="mt-1 text-slate-500">
+            {% if is_local %}
+            Local sensors and system metrics
+            {% else %}
+            Remote edge node via MQTT
+            {% endif %}
+        </p>
+    </div>
+
+    <!-- Connection stats row -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Status</p>
+            <p class="mt-1 text-2xl font-bold
+                {% if status == 'active' %}text-emerald-600
+                {% elif status == 'stale' %}text-amber-600
+                {% else %}text-slate-400{% endif %}">
+                {{ status | capitalize }}
+            </p>
+        </div>
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Last Seen</p>
+            <p class="mt-1 text-lg font-semibold text-slate-700 truncate">
+                {% if last_seen %}
+                <span id="last-seen-ts" data-ts="{{ last_seen }}">{{ last_seen[:19] | replace('T', ' ') }}</span>
+                {% else %}
+                <span class="text-slate-400">Never</span>
+                {% endif %}
+            </p>
+        </div>
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Sources</p>
+            <p class="mt-1 text-2xl font-bold text-slate-700">{{ reading_count }}</p>
+        </div>
+    </div>
+
+    <!-- Readings grid (HTMX auto-refresh) -->
+    <div>
+        <h2 class="text-lg font-semibold text-slate-700 mb-3">Live Readings</h2>
+        <div id="readings-container"
+             hx-get="/htmx/readings?node={{ detail_node }}"
+             hx-trigger="load, every 5s [!document.body.classList.contains('refresh-paused')]"
+             hx-swap="innerHTML"
+             class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {% if readings %}
+                {% for reading in readings %}
+                <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+                    <div class="flex items-center justify-between">
+                        <span class="text-sm font-medium text-slate-500">{{ reading.full_id }}</span>
+                        {% if reading.full_id.startswith('system:') %}
+                        <span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-700 font-medium">System</span>
+                        {% elif reading.full_id.startswith('gpio:') %}
+                        <span class="px-2 py-1 text-xs rounded-full bg-teal-100 text-teal-700 font-medium">GPIO</span>
+                        {% else %}
+                        <span class="px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-600 font-medium">{{ reading.source_type }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="mt-4">
+                        <span class="text-4xl font-bold text-slate-900">{{ reading.value }}</span>
+                        {% if reading.unit %}
+                        <span class="text-lg text-slate-400 ml-1">{{ reading.unit }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="mt-2 text-xs text-slate-400 reading-ts" data-ts="{{ reading.timestamp }}" title="{{ reading.timestamp }}">
+                        {{ reading.timestamp[:19] | replace('T', ' ') }}
+                    </div>
+                </div>
+                {% endfor %}
+            {% elif error %}
+                <div class="col-span-3 text-center text-red-500 py-8">
+                    <p>Error: {{ error }}</p>
+                </div>
+            {% else %}
+                <div class="col-span-3 text-center text-slate-400 py-8">
+                    <p>No readings from this node</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

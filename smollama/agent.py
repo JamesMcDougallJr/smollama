@@ -334,7 +334,11 @@ class Agent:
         logger.info(f"Processing message from {message.topic}: {message.payload[:100]}")
 
         # Ingest edge-node readings into the bridge provider so they appear
-        # in the dashboard and observation loop
+        # in the dashboard and observation loop, then return WITHOUT running the
+        # LLM agent loop. Readings arrive at every node's edge-publish cadence
+        # (a few seconds each); triggering an Ollama call per message makes the
+        # agent fall unboundedly behind the MQTT backlog. The periodic
+        # ObservationLoop already summarizes stored readings on its own interval.
         if message.topic.endswith("/readings"):
             try:
                 data = json.loads(message.payload)
@@ -344,6 +348,7 @@ class Agent:
                     self._mqtt_bridge.ingest_edge_payload(node, data["readings"])
             except (json.JSONDecodeError, KeyError, IndexError):
                 pass
+            return
 
         # Build context for LLM
         context = (

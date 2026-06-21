@@ -53,17 +53,26 @@ class MQTTBridgeProvider(ReadingProvider):
         self._persist()
 
     def _persist(self) -> None:
-        """Write cache to disk atomically via a temp-file rename."""
-        data = {
-            sid: {
+        """Merge in-memory cache into the on-disk cache and write atomically.
+
+        Merging (rather than overwriting) keeps another process's entries for
+        nodes/sources this process hasn't heard from intact, so a restart or a
+        second agent process can't wipe out the rest of the cache.
+        """
+        data = {}
+        if self._cache_path.exists():
+            try:
+                data = json.loads(self._cache_path.read_text())
+            except json.JSONDecodeError:
+                data = {}
+        for sid, r in self._cache.items():
+            data[sid] = {
                 "node": r.source_type,
                 "source": r.source_id,
                 "value": r.value,
                 "timestamp": r.timestamp.isoformat(),
                 "unit": r.unit,
             }
-            for sid, r in self._cache.items()
-        }
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._cache_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data))

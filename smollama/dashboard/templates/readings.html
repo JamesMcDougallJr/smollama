@@ -3,7 +3,7 @@
 {% block title %}Readings{% endblock %}
 
 {% block content %}
-<div class="space-y-8">
+<div class="space-y-6">
     <!-- Header -->
     <div class="flex items-center justify-between">
         <div>
@@ -18,9 +18,57 @@
         </div>
     </div>
 
+    <!-- Node Filter Bar -->
+    {% if nodes %}
+    <div class="flex flex-wrap gap-2 items-center">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider mr-1">Node</span>
+
+        <!-- Hidden input carries the active filter into every HTMX poll -->
+        <input type="hidden" id="node-filter" name="node" value="">
+
+        <!-- All -->
+        <button id="filter-btn-all" data-node=""
+                onclick="setNodeFilter('')"
+                class="filter-btn px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors
+                       bg-teal-600 text-white border-teal-600">
+            All
+        </button>
+
+        <!-- Local node -->
+        <button id="filter-btn-local" data-node="local"
+                onclick="setNodeFilter('local')"
+                class="filter-btn px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors
+                       bg-white text-slate-700 border-slate-200 hover:border-teal-400 hover:text-teal-700">
+            Local &middot; <span class="font-normal">{{ nodes.local }}</span>
+        </button>
+
+        <!-- Edge nodes -->
+        {% for edge in nodes.edge %}
+        <div class="flex items-stretch rounded-lg border border-slate-200 overflow-hidden">
+            <button id="filter-btn-{{ edge.name }}" data-node="{{ edge.name }}"
+                    onclick="setNodeFilter('{{ edge.name }}')"
+                    class="filter-btn flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors
+                           bg-white text-slate-700 hover:bg-slate-50">
+                <span class="w-2 h-2 rounded-full shrink-0
+                    {% if edge.status == 'active' %}bg-emerald-400
+                    {% elif edge.status == 'stale' %}bg-amber-400
+                    {% else %}bg-slate-300{% endif %}"></span>
+                {{ edge.name }}
+            </button>
+            <a href="/nodes/{{ edge.name }}"
+               title="View node details"
+               class="flex items-center px-2 border-l border-slate-200 text-slate-400 hover:text-teal-600 hover:bg-slate-50 transition-colors text-xs">
+                ↗
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <!-- Readings Grid -->
     <div id="readings-container"
          hx-get="/htmx/readings"
+         hx-include="#node-filter"
          hx-trigger="load, every 5s [!document.body.classList.contains('refresh-paused')]"
          hx-swap="innerHTML"
          class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -43,6 +91,16 @@
                     <span class="text-lg text-slate-400 ml-1">{{ reading.unit }}</span>
                     {% endif %}
                 </div>
+                <div class="mt-2 text-xs text-slate-400 reading-ts" data-ts="{{ reading.timestamp }}" title="{{ reading.timestamp }}">
+                    {{ reading.timestamp[:19] | replace('T', ' ') }}
+                </div>
+                <div class="mt-3">
+                    {% if reading.is_local %}
+                    <span class="text-xs text-teal-600 font-medium">Local</span>
+                    {% else %}
+                    <a href="/nodes/{{ reading.node_label }}" class="text-xs text-slate-500 hover:text-teal-600 font-medium transition-colors">{{ reading.node_label }}</a>
+                    {% endif %}
+                </div>
             </div>
             {% endfor %}
         {% elif error %}
@@ -56,4 +114,30 @@
         {% endif %}
     </div>
 </div>
+
+<script>
+function setNodeFilter(node) {
+    document.getElementById('node-filter').value = node;
+
+    // Update button visual state
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+        var isActive = btn.dataset.node === node;
+        if (isActive) {
+            btn.classList.add('bg-teal-600', 'text-white', 'border-teal-600');
+            btn.classList.remove('bg-white', 'text-slate-700', 'border-slate-200', 'hover:border-teal-400', 'hover:text-teal-700', 'hover:bg-slate-50');
+        } else {
+            btn.classList.remove('bg-teal-600', 'text-white', 'border-teal-600');
+            btn.classList.add('bg-white', 'text-slate-700');
+            // Restore appropriate hover classes
+            if (btn.id === 'filter-btn-local') {
+                btn.classList.add('border-slate-200', 'hover:border-teal-400', 'hover:text-teal-700');
+            } else {
+                btn.classList.add('hover:bg-slate-50');
+            }
+        }
+    });
+
+    htmx.trigger(document.getElementById('readings-container'), 'load');
+}
+</script>
 {% endblock %}

@@ -1,5 +1,7 @@
 """Tests for the unified readings abstraction layer."""
 
+import json
+
 import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
@@ -10,6 +12,7 @@ from smollama.readings import (
     ReadingManager,
     SystemReadingProvider,
     GPIOReadingProvider,
+    MQTTBridgeProvider,
 )
 from smollama.config import GPIOConfig, GPIOPinConfig
 from smollama.gpio_reader import GPIOReader
@@ -322,6 +325,78 @@ class TestSystemReadingProvider:
         # Should return 5 readings regardless of file access success
         assert len(readings) == 5
         assert all(r.source_type == "system" for r in readings)
+
+
+class TestMQTTBridgeProvider:
+    """Tests for MQTTBridgeProvider's edge-node cache."""
+
+    def test_source_type(self, tmp_path):
+        provider = MQTTBridgeProvider(cache_path=tmp_path / "cache.json")
+        assert provider.source_type == "mqtt_edge"
+
+    @pytest.mark.asyncio
+    async def test_ingest_and_read_all(self, tmp_path):
+        provider = MQTTBridgeProvider(cache_path=tmp_path / "cache.json")
+
+        provider.ingest_edge_payload(
+            "jetson-nano",
+            [{"source": "system:cpu_temp", "value": 48.5, "unit": "celsius", "ts": "2026-06-08T20:43:35"}],
+        )
+
+        readings = await provider.read_all()
+
+        assert len(readings) == 1
+        assert readings[0].source_type == "jetson-nano"
+        assert readings[0].source_id == "system:cpu_temp"
+        assert readings[0].value == 48.5
+
+    def test_persist_merges_with_existing_cache(self, tmp_path):
+        """A second provider instance must not wipe out the first's entries.
+
+        This is the scenario behind the master-dashboard bug: two agent
+        processes (or one agent restarting) each maintain their own
+        in-memory cache, but both write to the same cache file. Persisting
+        must merge with what's on disk rather than overwrite it.
+        """
+        cache_path = tmp_path / "cache.json"
+
+        provider_a = MQTTBridgeProvider(cache_path=cache_path)
+        provider_a.ingest_edge_payload(
+            "jetson-nano",
+            [{"source": "jetson_inference:object_count", "value": 2, "ts": "2026-06-14T14:00:00"}],
+        )
+
+        # A second process with its own empty in-memory cache ingests a
+        # reading for a different node and persists.
+        provider_b = MQTTBridgeProvider(cache_path=cache_path)
+        provider_b.ingest_edge_payload(
+            "other-node",
+            [{"source": "system:cpu_temp", "value": 40.0, "ts": "2026-06-14T14:00:01"}],
+        )
+
+        data = json.loads(cache_path.read_text())
+
+        assert "jetson-nano:jetson_inference:object_count" in data
+        assert "other-node:system:cpu_temp" in data
+
+    @pytest.mark.asyncio
+    async def test_load_from_file_round_trip(self, tmp_path):
+        cache_path = tmp_path / "cache.json"
+
+        writer = MQTTBridgeProvider(cache_path=cache_path)
+        writer.ingest_edge_payload(
+            "jetson-nano",
+            [{"source": "jetson_inference:object_count", "value": 3, "unit": None, "ts": "2026-06-14T14:00:00"}],
+        )
+
+        # Fresh instance (e.g. the dashboard process) with an empty in-memory
+        # cache must fall back to the persisted file.
+        reader = MQTTBridgeProvider(cache_path=cache_path)
+        readings = await reader.read_all()
+
+        assert len(readings) == 1
+        assert readings[0].full_id == "jetson-nano:jetson_inference:object_count"
+        assert readings[0].value == 3
 
 
 class TestGPIOReadingProvider:

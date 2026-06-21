@@ -21,12 +21,26 @@
             <span class="text-lg text-slate-400 ml-1">{{ reading.unit }}</span>
             {% endif %}
         </div>
+        <div class="mt-2 text-xs text-slate-400 reading-ts" data-ts="{{ reading.timestamp }}" title="{{ reading.timestamp }}">
+            {{ reading.timestamp[:19] | replace('T', ' ') }}
+        </div>
 
         <!-- Sparkline for numeric values with history -->
         {% if reading.history is defined %}
             {% set full_id = reading.full_id %}
             {% set history = reading.history %}
             {% include "partials/sparkline.html" %}
+        {% endif %}
+
+        <!-- Node source label -->
+        {% if reading.node_label is defined %}
+        <div class="mt-3">
+            {% if reading.is_local %}
+            <span class="text-xs text-teal-600 font-medium">Local</span>
+            {% else %}
+            <a href="/nodes/{{ reading.node_label }}" class="text-xs text-slate-500 hover:text-teal-600 font-medium transition-colors">{{ reading.node_label }}</a>
+            {% endif %}
+        </div>
         {% endif %}
     </div>
     {% endfor %}

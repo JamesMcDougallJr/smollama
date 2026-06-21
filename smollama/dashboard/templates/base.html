@@ -31,12 +31,29 @@
             opacity: 1;
         }
 
-        /* Auto-refresh toggle button */
-        .refresh-toggle {
+        /* Auto-refresh controls */
+        .refresh-controls {
             position: fixed;
             bottom: 20px;
             right: 20px;
             z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .refresh-status {
+            padding: 6px 12px;
+            border-radius: 8px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            color: #64748b;
+            font-size: 12px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            white-space: nowrap;
+        }
+        .refresh-toggle {
             padding: 10px 18px;
             border-radius: 8px;
             background: #ffffff;
@@ -125,13 +142,18 @@
         </div>
     </footer>
 
-    <!-- Auto-refresh toggle button -->
-    <button id="refresh-toggle" class="refresh-toggle" onclick="toggleAutoRefresh()">
-        <span id="refresh-icon">⏸</span> <span id="refresh-text">Pause</span>
-    </button>
+    <!-- Auto-refresh controls -->
+    <div class="refresh-controls">
+        <span id="refresh-status" class="refresh-status"></span>
+        <button id="refresh-toggle" class="refresh-toggle" onclick="toggleAutoRefresh()">
+            <span id="refresh-icon">⏸</span> <span id="refresh-text">Pause</span>
+        </button>
+    </div>
 
     <script>
         const STORAGE_KEY = 'smollama_auto_refresh';
+        let refreshCountdown = null;
+        let refreshIntervalSeconds = null;
 
         function toggleAutoRefresh() {
             const currentState = localStorage.getItem(STORAGE_KEY) !== 'paused';
@@ -156,10 +178,84 @@
                 icon.textContent = '⏸';
                 text.textContent = 'Pause';
             }
+            updateRefreshStatus();
         }
 
-        document.addEventListener('DOMContentLoaded', updateRefreshState);
-        window.addEventListener('storage', function(e) {
+        // Shows a "Next refresh in Ns" countdown for the page's auto-polling
+        // element (identified by an `hx-trigger` containing "every Ns").
+        function updateRefreshStatus() {
+            const statusEl = document.getElementById('refresh-status');
+            if (!statusEl) return;
+
+            if (document.body.classList.contains('refresh-paused')) {
+                statusEl.textContent = 'Auto-refresh paused';
+                return;
+            }
+            if (refreshCountdown === null) {
+                statusEl.textContent = '';
+                return;
+            }
+            statusEl.textContent = refreshCountdown <= 0
+                ? 'Refreshing…'
+                : `Next refresh in ${refreshCountdown}s`;
+        }
+
+        function initRefreshCountdown() {
+            const pollEl = document.querySelector('[hx-trigger*="every"]');
+            if (!pollEl) return;
+
+            const match = (pollEl.getAttribute('hx-trigger') || '').match(/every (\d+)s/);
+            if (!match) return;
+
+            refreshIntervalSeconds = parseInt(match[1], 10);
+            refreshCountdown = refreshIntervalSeconds;
+            updateRefreshStatus();
+
+            setInterval(function () {
+                if (document.body.classList.contains('refresh-paused')) {
+                    updateRefreshStatus();
+                    return;
+                }
+                refreshCountdown = refreshCountdown > 0 ? refreshCountdown - 1 : 0;
+                updateRefreshStatus();
+            }, 1000);
+
+            pollEl.addEventListener('htmx:afterSwap', function () {
+                refreshCountdown = refreshIntervalSeconds;
+                updateRefreshStatus();
+            });
+        }
+
+        // Renders each reading card's `data-ts` as a live "Xs/Xm/Xh ago" label
+        // so staleness is obvious without comparing timestamps by hand.
+        function formatRelativeTime(date) {
+            const diffSec = Math.round((Date.now() - date.getTime()) / 1000);
+            if (diffSec < 5) return 'just now';
+            if (diffSec < 60) return `${diffSec}s ago`;
+            const diffMin = Math.round(diffSec / 60);
+            if (diffMin < 60) return `${diffMin}m ago`;
+            const diffHour = Math.round(diffMin / 60);
+            if (diffHour < 24) return `${diffHour}h ago`;
+            const diffDay = Math.round(diffHour / 24);
+            return `${diffDay}d ago`;
+        }
+
+        function updateReadingTimestamps() {
+            document.querySelectorAll('.reading-ts[data-ts]').forEach(function (el) {
+                const date = new Date(el.dataset.ts);
+                if (isNaN(date.getTime())) return;
+                el.textContent = formatRelativeTime(date);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            updateRefreshState();
+            initRefreshCountdown();
+            updateReadingTimestamps();
+        });
+        setInterval(updateReadingTimestamps, 1000);
+        document.body.addEventListener('htmx:afterSwap', updateReadingTimestamps);
+        window.addEventListener('storage', function (e) {
             if (e.key === STORAGE_KEY) updateRefreshState();
         });
     </script>

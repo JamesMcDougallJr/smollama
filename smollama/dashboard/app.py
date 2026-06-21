@@ -13,12 +13,61 @@ from fastapi.templating import Jinja2Templates
 from ..config import Config
 from ..gpio_reader import GPIOReader, GPIO_AVAILABLE
 from ..memory import LocalStore
-from ..readings import ReadingManager
+from ..readings import ReadingManager, Reading
 
 logger = logging.getLogger(__name__)
 
 # Template directory
 TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+
+def _local_source_types(readings_manager: ReadingManager) -> set[str]:
+    """Source types that belong to the local node (all registered providers except mqtt_edge)."""
+    return {st for st in readings_manager.source_types if st != "mqtt_edge"}
+
+
+def _compute_node_status(node_readings: list[Reading]) -> str:
+    """Return 'active', 'stale', or 'offline' based on the age of the most recent reading."""
+    if not node_readings:
+        return "offline"
+    latest = max(r.timestamp for r in node_readings)
+    now = datetime.now() if latest.tzinfo is None else datetime.now(timezone.utc)
+    age = (now - latest).total_seconds()
+    if age < 30:
+        return "active"
+    elif age < 300:
+        return "stale"
+    return "offline"
+
+
+def _build_node_info(all_readings: list[Reading], readings_manager: ReadingManager, config: Any) -> dict:
+    """Build node categorization data for the filter bar and detail pages."""
+    local_types = _local_source_types(readings_manager)
+    edge_names = sorted({r.source_type for r in all_readings if r.source_type not in local_types})
+    edge_nodes = []
+    for name in edge_names:
+        nr = [r for r in all_readings if r.source_type == name]
+        edge_nodes.append({
+            "name": name,
+            "status": _compute_node_status(nr),
+            "last_seen": max(r.timestamp for r in nr).isoformat() if nr else None,
+            "count": len(nr),
+        })
+    return {"local": config.node.name, "edge": edge_nodes}
+
+
+def _to_reading_dict(r: Reading, local_types: set[str]) -> dict:
+    """Serialise a Reading to the dict shape used by templates."""
+    is_local = r.source_type in local_types
+    return {
+        "full_id": r.full_id,
+        "value": r.value,
+        "unit": r.unit,
+        "timestamp": r.timestamp.isoformat(),
+        "source_type": r.source_type,
+        "node_label": "Local" if is_local else r.source_type,
+        "is_local": is_local,
+    }
 
 
 def create_app(
@@ -79,19 +128,12 @@ def create_app(
             "page": "readings",
         }
 
-        # Get current readings if available
         if readings:
             try:
                 current = await readings.read_all()
-                context["readings"] = [
-                    {
-                        "full_id": r.full_id,
-                        "value": r.value,
-                        "unit": r.unit,
-                        "timestamp": r.timestamp.isoformat(),
-                    }
-                    for r in current
-                ]
+                local_types = _local_source_types(readings)
+                context["readings"] = [_to_reading_dict(r, local_types) for r in current]
+                context["nodes"] = _build_node_info(current, readings, config)
             except Exception as e:
                 logger.error(f"Failed to get readings: {e}")
                 context["readings"] = []
@@ -260,20 +302,18 @@ def create_app(
     # ==================== HTMX Partials ====================
 
     @app.get("/htmx/readings", response_class=HTMLResponse)
-    async def htmx_readings(request: Request):
-        """HTMX partial for live readings update."""
+    async def htmx_readings(request: Request, node: str = ""):
+        """HTMX partial for live readings update, with optional node filter."""
         current_readings = []
         if readings:
             try:
                 current = await readings.read_all()
-                current_readings = [
-                    {
-                        "full_id": r.full_id,
-                        "value": r.value,
-                        "unit": r.unit,
-                    }
-                    for r in current
-                ]
+                local_types = _local_source_types(readings)
+                if node == "local":
+                    current = [r for r in current if r.source_type in local_types]
+                elif node:
+                    current = [r for r in current if r.source_type == node]
+                current_readings = [_to_reading_dict(r, local_types) for r in current]
             except Exception:
                 pass
 
@@ -283,6 +323,40 @@ def create_app(
             "partials/readings_list.html",
             {"readings": current_readings, "gpio_mock": gpio_mock},
         )
+
+    @app.get("/nodes/{node_name}", response_class=HTMLResponse)
+    async def node_detail_page(request: Request, node_name: str):
+        """Node detail / drill-down page."""
+        context = {
+            "node_name": config.node.name,
+            "page": "readings",
+            "detail_node": node_name,
+        }
+
+        if readings:
+            try:
+                current = await readings.read_all()
+                local_types = _local_source_types(readings)
+                is_local = node_name == "local" or node_name == config.node.name
+
+                if node_name == "local":
+                    node_readings = [r for r in current if r.source_type in local_types]
+                else:
+                    node_readings = [r for r in current if r.source_type == node_name]
+
+                context["is_local"] = is_local
+                context["status"] = _compute_node_status(node_readings)
+                context["last_seen"] = (
+                    max(r.timestamp for r in node_readings).isoformat() if node_readings else None
+                )
+                context["reading_count"] = len(node_readings)
+                context["readings"] = [_to_reading_dict(r, local_types) for r in node_readings]
+            except Exception as e:
+                logger.error(f"Failed to get node readings for {node_name}: {e}")
+                context["readings"] = []
+                context["error"] = str(e)
+
+        return templates.TemplateResponse(request, "node_detail.html", context)
 
     @app.get("/htmx/observations", response_class=HTMLResponse)
     async def htmx_observations(request: Request, query: str = "", hours: int = 0):
