@@ -75,6 +75,13 @@ plugins:
         cols: 16
         rows: 2
         backlight: true
+    jetson_inference:
+      enabled: false  # Jetson Nano only: model-agnostic jetson-inference bridge.
+      config:          # A separate Py3.6 process (jetson_infer.py) writes this file.
+        file_path: "~/.smollama/jetson_inference.json"
+        max_age_seconds: 30  # drop readings older than this (writer stopped)
+        # source_type: jetson_inference  # override to run multiple cameras/writers
+        # See docs/jetson-inference.md for swapping/adding models.
 
   # Custom plugins (installed via `smollama plugin install`)
   custom: []

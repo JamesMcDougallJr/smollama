@@ -376,6 +376,10 @@ install_packages() {
   if command -v uv &> /dev/null; then
     info "Using UV for fast installation..."
 
+    # Ensure the venv can see system site-packages (needed for JetPack libraries
+    # like jetson.inference on Jetson Nano, and RPi.GPIO on Pi)
+    uv venv --system-site-packages .venv 2>/dev/null || true
+
     # For dev mode, use sync for editable install
     # For minimal/all modes, use tool install for global CLI availability
     if [[ "$mode" == "dev" ]]; then
@@ -857,17 +861,25 @@ main() {
   install_mosquitto "$os_type" "$pkg_manager"
   echo
 
-  # Install Ollama (required dependency)
-  install_ollama "$os_type" "$pkg_manager"
-  echo
+  # Install Ollama + models — skipped for minimal (edge / no-LLM) installs.
+  # Edge nodes run in agent.mode: edge and never call an LLM, so there's no
+  # point installing Ollama or pulling multi-GB models on them.
+  if [[ "$INSTALL_MODE" == "minimal" ]]; then
+    info "Minimal mode: skipping Ollama install and model pulls (no LLM on this node)"
+    echo
+  else
+    # Install Ollama (required for full/dev mode)
+    install_ollama "$os_type" "$pkg_manager"
+    echo
 
-  # Pull LLM model
-  pull_ollama_model "gemma4:e2b"
-  echo
+    # Pull LLM model
+    pull_ollama_model "gemma4:e2b"
+    echo
 
-  # Pull embedding model (required by memory system)
-  pull_ollama_model "all-minilm:l6-v2"
-  echo
+    # Pull embedding model (required by memory system)
+    pull_ollama_model "all-minilm:l6-v2"
+    echo
+  fi
 
   # Validate installation
   validate_installation
