@@ -310,9 +310,19 @@ async def cmd_status(args: argparse.Namespace) -> int:
     }
 
     try:
+        from .plugins.loader import PluginLoader
         from .readings import ReadingManager, SystemReadingProvider
 
-        readings = ReadingManager()
+        plugin_loader = PluginLoader(additional_paths=config.plugins.paths)
+        plugin_loader.discover_plugins()
+        plugin_configs = {
+            name: cfg.config
+            for name, cfg in config.plugins.builtin.items()
+            if cfg.enabled
+        }
+        plugin_loader.load_all_plugins(plugin_configs)
+
+        readings = ReadingManager(plugin_loader=plugin_loader)
         readings.register(SystemReadingProvider())
 
         # Optionally add GPIO if configured

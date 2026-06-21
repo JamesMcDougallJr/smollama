@@ -255,7 +255,7 @@ class PluginLoader:
             # Check dependencies
             deps_ok, deps_error = plugin.check_dependencies()
             if not deps_ok:
-                logger.debug(
+                logger.info(
                     f"Skipping plugin {plugin_name}: {deps_error or 'dependencies not met'}"
                 )
                 self._skipped_plugins[plugin_name] = (

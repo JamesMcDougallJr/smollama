@@ -264,6 +264,16 @@ def _parse_gpio_pins(data: list) -> list[GPIOPinConfig]:
     return pins
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = base.copy()
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
 def _discover_config_path() -> Path | None:
     """Search standard locations for a config file.
 
@@ -314,6 +324,13 @@ def load_config(config_path: str | Path | None = None) -> Config:
         if path.exists():
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
+
+            local_path = path.parent / (path.stem.split(".")[0] + ".local.yaml")
+            if local_path.exists():
+                with open(local_path) as lf:
+                    local_data = yaml.safe_load(lf) or {}
+                logger.info(f"Applying local config overrides from: {local_path}")
+                data = _deep_merge(data, local_data)
 
             # Parse node config
             if "node" in data:

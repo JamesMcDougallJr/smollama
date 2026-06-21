@@ -304,7 +304,13 @@ class Agent:
                                     "source": r.full_id,
                                     "value": r.value,
                                     "unit": r.unit,
-                                    "ts": r.timestamp.isoformat(),
+                                    # Emit a timezone-aware timestamp (attach this
+                                    # node's local offset) so the master computes
+                                    # reading age correctly even when nodes are in
+                                    # different timezones. A naive timestamp here
+                                    # makes cross-timezone readings look hours stale
+                                    # and the node show "offline" while it is live.
+                                    "ts": r.timestamp.astimezone().isoformat(),
                                 }
                                 for r in readings
                             ],

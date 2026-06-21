@@ -119,6 +119,10 @@ The old names `SensorPlugin` and `ToolPlugin` are aliased for backwards compatib
 
 Display plugins (and any future GPIO write plugins) use `smollama/plugins/builtin/gpio_backend.py` which auto-detects Pi 4 (RPi.GPIO) vs Pi 5 (lgpio). The Pi5-specific plugin variants have been merged into the main plugins — `SH5461ASPi5Plugin` and `S5161ASPi5Plugin` are now aliases.
 
+### Jetson Nano vision (jetson-inference bridge)
+
+The `jetson_inference` plugin ingests deep-vision results (object detection, pose, classification) from a Jetson Nano. Because jetson-inference's bindings are Python-3.6-only and smollama is 3.10, a separate Py3.6 writer (`~/jetson-inference/python/examples/jetson_infer.py`) runs the camera + networks and writes a model-agnostic JSON contract that the plugin relays. **To swap or add models, you almost never touch smollama** — see **[docs/jetson-inference.md](docs/jetson-inference.md)** for the contract, swapping a model, and adding a new algorithm (e.g. `actionNet`, which needs a jetson-inference rebuild).
+
 ### Adding a new plugin
 
 1. Create `smollama/plugins/builtin/yourplugin.py` — subclass `ReadPlugin`, `WritePlugin`, or `ReadWritePlugin`
