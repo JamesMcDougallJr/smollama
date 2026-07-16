@@ -1,6 +1,9 @@
 {% if readings %}
     {% for reading in readings %}
-    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm reading-card"
+         data-full-id="{{ reading.full_id }}"
+         data-value="{{ reading.value }}"
+         data-unit="{{ reading.unit or '' }}">
         <div class="flex items-center justify-between">
             <span class="text-sm font-medium text-slate-500">{{ reading.full_id }}</span>
             {% if reading.full_id.startswith('system:') %}
@@ -15,22 +18,34 @@
             <span class="px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-600 font-medium">{{ reading.full_id.split(':')[0] }}</span>
             {% endif %}
         </div>
-        <div class="mt-4">
+
+        <!-- Latest value display -->
+        <div class="value-display mt-4">
             <span class="text-4xl font-bold text-slate-900">{{ reading.value }}</span>
             {% if reading.unit %}
             <span class="text-lg text-slate-400 ml-1">{{ reading.unit }}</span>
             {% endif %}
         </div>
+
+        <!-- Graph display (shown in graph mode) -->
+        <div class="graph-area mt-4" style="display:none">
+            <div class="relative">
+                <canvas class="graph-canvas w-full block" width="280" height="64"></canvas>
+                <!-- Hover tooltip -->
+                <div class="graph-tooltip absolute pointer-events-none hidden
+                            bg-slate-800 text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap"
+                     style="transform: translateX(-50%)"></div>
+            </div>
+            <div class="flex justify-between mt-1.5">
+                <span class="text-xs text-slate-400 graph-min-label"></span>
+                <span class="text-xs text-slate-400 graph-samples-label"></span>
+                <span class="text-xs text-slate-400 graph-max-label"></span>
+            </div>
+        </div>
+
         <div class="mt-2 text-xs text-slate-400 reading-ts" data-ts="{{ reading.timestamp }}" title="{{ reading.timestamp }}">
             {{ reading.timestamp[:19] | replace('T', ' ') }}
         </div>
-
-        <!-- Sparkline for numeric values with history -->
-        {% if reading.history is defined %}
-            {% set full_id = reading.full_id %}
-            {% set history = reading.history %}
-            {% include "partials/sparkline.html" %}
-        {% endif %}
 
         <!-- Node source label -->
         {% if reading.node_label is defined %}

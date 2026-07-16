@@ -10,11 +10,24 @@
             <h1 class="text-3xl font-bold text-slate-900">Live Readings</h1>
             <p class="mt-1 text-slate-500">Current sensor values and system metrics</p>
         </div>
-        <div class="htmx-indicator">
-            <svg class="animate-spin h-5 w-5 text-teal-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
+        <div class="flex items-center gap-3">
+            <!-- View mode toggle -->
+            <div class="flex rounded-lg border border-slate-200 overflow-hidden text-sm font-medium" role="group" aria-label="View mode">
+                <button id="btn-latest" onclick="setViewMode('latest')"
+                        class="px-3 py-1.5 transition-colors bg-teal-600 text-white">
+                    Latest
+                </button>
+                <button id="btn-graph" onclick="setViewMode('graph')"
+                        class="px-3 py-1.5 transition-colors bg-white text-slate-700 hover:bg-slate-50 border-l border-slate-200">
+                    Graph
+                </button>
+            </div>
+            <div class="htmx-indicator">
+                <svg class="animate-spin h-5 w-5 text-teal-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
         </div>
     </div>
 
@@ -119,7 +132,6 @@
 function setNodeFilter(node) {
     document.getElementById('node-filter').value = node;
 
-    // Update button visual state
     document.querySelectorAll('.filter-btn').forEach(function(btn) {
         var isActive = btn.dataset.node === node;
         if (isActive) {
@@ -128,7 +140,6 @@ function setNodeFilter(node) {
         } else {
             btn.classList.remove('bg-teal-600', 'text-white', 'border-teal-600');
             btn.classList.add('bg-white', 'text-slate-700');
-            // Restore appropriate hover classes
             if (btn.id === 'filter-btn-local') {
                 btn.classList.add('border-slate-200', 'hover:border-teal-400', 'hover:text-teal-700');
             } else {
@@ -139,5 +150,207 @@ function setNodeFilter(node) {
 
     htmx.trigger(document.getElementById('readings-container'), 'load');
 }
+
+// ── Graph mode ────────────────────────────────────────────────────────────────
+
+const VIEW_MODE_KEY = 'smollama_readings_view';
+const MAX_HISTORY   = 60; // samples kept per sensor
+const readingHistory = {};  // { 'system:cpu_temp': [{v, t}, …] }
+
+// Capture current card values into the rolling history buffer.
+function captureReadings() {
+    document.querySelectorAll('.reading-card').forEach(function(card) {
+        var fullId = card.dataset.fullId;
+        var raw    = card.dataset.value;
+        var v      = parseFloat(raw);
+        if (!fullId || isNaN(v)) return;
+
+        if (!readingHistory[fullId]) readingHistory[fullId] = [];
+        readingHistory[fullId].push({ v: v, t: Date.now() });
+        if (readingHistory[fullId].length > MAX_HISTORY) {
+            readingHistory[fullId].shift();
+        }
+    });
+}
+
+// Draw a sparkline onto a canvas element given an array of numeric values.
+function drawSparkline(canvas, values) {
+    var dpr = window.devicePixelRatio || 1;
+    var cssW = canvas.offsetWidth  || 280;
+    var cssH = canvas.offsetHeight || 64;
+    canvas.width  = cssW * dpr;
+    canvas.height = cssH * dpr;
+
+    var ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    var min = Math.min.apply(null, values);
+    var max = Math.max.apply(null, values);
+    var range = (max - min) || 1;
+    var pad = 6, pw = cssW - pad * 2, ph = cssH - pad * 2;
+    var n = values.length;
+
+    function px(i) { return pad + (i / (n - 1)) * pw; }
+    function py(v) { return cssH - pad - ((v - min) / range) * ph; }
+
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    // Area fill
+    ctx.beginPath();
+    values.forEach(function(v, i) { i === 0 ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v)); });
+    ctx.lineTo(px(n - 1), cssH - pad);
+    ctx.lineTo(px(0),     cssH - pad);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(13,148,136,0.08)';
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    values.forEach(function(v, i) { i === 0 ? ctx.moveTo(px(i), py(v)) : ctx.lineTo(px(i), py(v)); });
+    ctx.strokeStyle = '#0d9488';
+    ctx.lineWidth   = 2;
+    ctx.lineJoin    = 'round';
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+
+    // Endpoint dot
+    ctx.beginPath();
+    ctx.arc(px(n - 1), py(values[n - 1]), 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#0d9488';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+}
+
+// Wire hover tooltip onto a card's canvas.
+function attachTooltip(canvas, values, unit) {
+    var tooltip = canvas.closest('.reading-card').querySelector('.graph-tooltip');
+    if (!tooltip) return;
+
+    canvas.addEventListener('mousemove', function(e) {
+        var rect = canvas.getBoundingClientRect();
+        var relX = e.clientX - rect.left;
+        var frac = Math.max(0, Math.min(1, (relX - 6) / (rect.width - 12)));
+        var idx  = Math.round(frac * (values.length - 1));
+        var val  = values[idx];
+
+        tooltip.textContent = val.toFixed(2) + (unit ? ' ' + unit : '');
+        tooltip.style.left  = relX + 'px';
+        tooltip.style.top   = '-28px';
+        tooltip.classList.remove('hidden');
+    });
+    canvas.addEventListener('mouseleave', function() {
+        tooltip.classList.add('hidden');
+    });
+}
+
+// Render sparklines into all cards that have numeric history.
+function renderSparklines() {
+    document.querySelectorAll('.reading-card').forEach(function(card) {
+        var fullId  = card.dataset.fullId;
+        var unit    = card.dataset.unit || '';
+        var history = readingHistory[fullId] || [];
+        var canvas  = card.querySelector('.graph-canvas');
+        if (!canvas) return;
+
+        if (history.length < 2) {
+            // Show a "collecting" hint inside the graph area
+            var area = card.querySelector('.graph-area');
+            if (area) {
+                var existing = area.querySelector('.collecting-hint');
+                if (!existing) {
+                    var hint = document.createElement('p');
+                    hint.className = 'collecting-hint text-xs text-slate-400 text-center py-4';
+                    hint.textContent = 'Collecting data…';
+                    area.insertBefore(hint, canvas.parentElement);
+                }
+                canvas.parentElement.style.display = 'none';
+                area.querySelector('.graph-min-label').textContent   = '';
+                area.querySelector('.graph-max-label').textContent   = '';
+                area.querySelector('.graph-samples-label').textContent = '';
+            }
+            return;
+        }
+
+        var area = card.querySelector('.graph-area');
+        if (area) {
+            var hint = area.querySelector('.collecting-hint');
+            if (hint) hint.remove();
+            canvas.parentElement.style.display = '';
+        }
+
+        var values = history.map(function(h) { return h.v; });
+        var min = Math.min.apply(null, values);
+        var max = Math.max.apply(null, values);
+
+        drawSparkline(canvas, values);
+        attachTooltip(canvas, values, unit);
+
+        var minLabel     = card.querySelector('.graph-min-label');
+        var maxLabel     = card.querySelector('.graph-max-label');
+        var samplesLabel = card.querySelector('.graph-samples-label');
+        if (minLabel)     minLabel.textContent     = min.toFixed(2) + (unit ? ' ' + unit : '');
+        if (maxLabel)     maxLabel.textContent     = max.toFixed(2) + (unit ? ' ' + unit : '');
+        if (samplesLabel) samplesLabel.textContent = history.length + ' pts';
+    });
+}
+
+// Apply the current view mode to all cards.
+function applyViewMode() {
+    var isGraph = localStorage.getItem(VIEW_MODE_KEY) === 'graph';
+
+    document.querySelectorAll('.reading-card').forEach(function(card) {
+        var fullId  = card.dataset.fullId;
+        var raw     = card.dataset.value;
+        var numeric = !isNaN(parseFloat(raw));
+
+        var valueDisplay = card.querySelector('.value-display');
+        var graphArea    = card.querySelector('.graph-area');
+
+        if (isGraph && numeric) {
+            if (valueDisplay) valueDisplay.style.display = 'none';
+            if (graphArea)    graphArea.style.display    = '';
+        } else {
+            if (valueDisplay) valueDisplay.style.display = '';
+            if (graphArea)    graphArea.style.display    = 'none';
+        }
+    });
+
+    if (isGraph) renderSparklines();
+}
+
+// Switch view mode and persist.
+function setViewMode(mode) {
+    localStorage.setItem(VIEW_MODE_KEY, mode);
+
+    var btnLatest = document.getElementById('btn-latest');
+    var btnGraph  = document.getElementById('btn-graph');
+    var active    = 'bg-teal-600 text-white';
+    var inactive  = 'bg-white text-slate-700 hover:bg-slate-50';
+
+    if (mode === 'graph') {
+        btnLatest.className = 'px-3 py-1.5 transition-colors ' + inactive;
+        btnGraph.className  = 'px-3 py-1.5 transition-colors border-l border-slate-200 ' + active;
+    } else {
+        btnLatest.className = 'px-3 py-1.5 transition-colors ' + active;
+        btnGraph.className  = 'px-3 py-1.5 transition-colors border-l border-slate-200 ' + inactive;
+    }
+
+    applyViewMode();
+}
+
+// After each HTMX swap: capture values and re-apply view mode.
+document.getElementById('readings-container').addEventListener('htmx:afterSwap', function() {
+    captureReadings();
+    applyViewMode();
+});
+
+// Initialise on first load.
+document.addEventListener('DOMContentLoaded', function() {
+    captureReadings();
+    var saved = localStorage.getItem(VIEW_MODE_KEY) || 'latest';
+    setViewMode(saved);
+});
 </script>
 {% endblock %}
