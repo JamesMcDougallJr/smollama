@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %}Frames{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Header -->
+    <div class="flex items-end justify-between flex-wrap gap-2">
+        <div>
+            <h1 class="text-3xl font-bold text-slate-900">Frames</h1>
+            <p class="mt-1 text-slate-500">Search camera keyframes by describing what you're looking for</p>
+        </div>
+        {% if frame_stats %}
+        <div class="text-sm text-slate-500">
+            {{ frame_stats.frame_count }} frames indexed
+            {% if not frame_stats.semantic_search %}
+            <span class="ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                label search only — CLIP text encoder unavailable
+            </span>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    {% if not frames_enabled %}
+    <div class="text-center text-slate-400 py-12">
+        <p class="text-lg">Frame search is not enabled</p>
+        <p class="mt-1 text-sm">Set <code class="bg-slate-100 px-1 rounded">frames.enabled: true</code> in config.yaml — see docs/frame-search.md</p>
+    </div>
+    {% else %}
+
+    <!-- Search -->
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+        <input type="text"
+               id="search-input"
+               name="query"
+               value="{{ query }}"
+               placeholder="Describe a scene… e.g. 'black cat', 'person carrying a box'"
+               hx-get="/htmx/frames"
+               hx-trigger="keyup changed delay:400ms"
+               hx-target="#frames-results"
+               hx-include="this"
+               hx-swap="innerHTML"
+               hx-push-url="true"
+               class="w-full bg-white border border-slate-300 rounded-lg px-4 py-2 text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent">
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const searchInput = document.getElementById('search-input');
+            searchInput.addEventListener('input', function() {
+                const query = searchInput.value.trim();
+                const url = new URL(window.location);
+                query ? url.searchParams.set('query', query) : url.searchParams.delete('query');
+                window.history.pushState({}, '', url);
+            });
+        });
+    </script>
+
+    <!-- Results grid -->
+    <div id="frames-results">
+        {% include "partials/frames_results.html" %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

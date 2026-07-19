@@ -32,6 +32,12 @@ So there are always two independent processes, joined by a file:
 Only **one** process can own the CSI camera, so all enabled networks run sequentially in the
 one writer. Images are never written to disk or transmitted — only inference metadata.
 
+> **Exception — frame search.** When the optional CLIP frame-search feature is enabled
+> ([docs/frame-search.md](frame-search.md)), the writer additionally saves change-gated
+> keyframe thumbnails + embeddings to a local spool that the edge agent relays to the
+> master. That is a deliberate, opt-in relaxation of the metadata-only rule; everything
+> below (the readings contract) is unchanged by it.
+
 ---
 
 ## The JSON contract (the swap interface)

@@ -46,6 +46,24 @@ plugins:
         digit_pins: [17, 27, 22, 5]
         segment_pins: {a: 6, b: 13, c: 19, d: 26, e: 21, f: 20, g: 16, dp: 12}
 
+    # Observation-domain plugins (master-side): specialize the observation loop
+    # for audio/video sources. Disabled = fully generic behavior (default).
+    vision_observation:
+      enabled: false
+      config:
+        # full_id patterns this domain claims (matches relayed edge readings
+        # like "pipi:jetson_inference:person_count" and local ones alike)
+        source_patterns: ["*jetson_inference*"]
+        # Window for "no humans detected in the past X hours" derivations
+        absence_window_hours: 3
+        # Optional: override/extend the meaning of source names for the prompt
+        # source_semantics:
+        #   person_count: "number of humans currently detected by the camera"
+    audio_observation:
+      enabled: false
+      config:
+        source_patterns: []   # skeleton — no audio sensor yet
+
   custom: []
 
 agent:
@@ -74,7 +92,31 @@ memory:
   observation_enabled: true
   observation_interval_minutes: 15
   observation_lookback_minutes: 60
+  # How domain passes (vision/audio observer plugins) share the LLM budget:
+  #   "replace"  — an active domain takes the cycle's single LLM call, rotating
+  #                among active domains (memory-constrained nodes)
+  #   "parallel" — generic + every active domain pass run each cycle
+  observation_domains_mode: "replace"
   sensor_log_retention_days: 90
+
+# CLIP frame search (camera keyframes, see docs/frame-search.md)
+# Master side: index + dashboard/tool search. Edge camera nodes instead set
+# enabled: true with mode "edge" to relay the writer's spool.
+frames:
+  enabled: false
+  db_path: "~/.smollama/frames.db"
+  thumbnail_dir: "~/.smollama/frames"
+  # Exported by scripts/jetson/export_clip.py — both must point at the SAME
+  # export the Jetson's image encoder came from, or search silently degrades
+  clip_text_model: ""     # e.g. "~/clip-export/text_encoder.onnx"
+  clip_tokenizer: ""      # e.g. "~/clip-export/bpe_simple_vocab_16e6.txt.gz"
+  retention_days: 30
+  archive_dir: ""         # e.g. "~/frame-archive" — staged before pruning
+  archive_command: ""     # e.g. "rclone move ~/frame-archive remote:frames"
+  # Edge-only settings (camera node relaying the writer's spool):
+  spool_dir: "~/.smollama/frames_spool"
+  publish_batch: 5
+  spool_max_entries: 500
 
 # CRDT sync configuration (master doesn't sync elsewhere)
 sync:

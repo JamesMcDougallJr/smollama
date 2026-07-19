@@ -161,6 +161,26 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     )
     store.connect()
 
+    # Frame search store (read side; the agent process does the writing —
+    # WAL mode makes the shared sqlite file safe across the two processes)
+    frames = None
+    if config.frames.enabled and config.agent.mode != "edge":
+        from .frames import ClipTextEncoder, FrameStore
+
+        text_encoder = None
+        if config.frames.clip_text_model:
+            text_encoder = ClipTextEncoder(
+                model_path=config.frames.clip_text_model,
+                tokenizer_path=config.frames.clip_tokenizer,
+                context_length=config.frames.context_length,
+            )
+        frames = FrameStore(
+            db_path=config.frames.db_path,
+            thumbnail_dir=config.frames.thumbnail_dir,
+            text_encoder=text_encoder,
+        )
+        frames.connect()
+
     # Initialize plugin loader and load sensor plugins
     plugin_loader = PluginLoader(additional_paths=config.plugins.paths)
     plugin_loader.discover_plugins()
@@ -214,7 +234,15 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     print(f"Node: {config.node.name}")
     print(f"URL: http://{args.host}:{args.port}")
 
-    app = create_app(config, store=store, readings=readings, gpio_reader=gpio, discovery_manager=discovery_manager)
+    app = create_app(
+        config,
+        store=store,
+        readings=readings,
+        gpio_reader=gpio,
+        discovery_manager=discovery_manager,
+        observers=plugin_loader.get_observer_plugins(),
+        frames=frames,
+    )
 
     try:
         verbose = getattr(args, "verbose", False)
@@ -231,6 +259,8 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
             await discovery_manager.stop()
         plugin_loader.shutdown_plugins()
         store.close()
+        if frames:
+            frames.close()
 
     return 0
 

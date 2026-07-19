@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -76,6 +76,8 @@ def create_app(
     readings: ReadingManager | None = None,
     gpio_reader: GPIOReader | None = None,
     discovery_manager: Any = None,
+    observers: list | None = None,
+    frames: Any = None,
 ) -> FastAPI:
     """Create the FastAPI dashboard application.
 
@@ -84,6 +86,9 @@ def create_app(
         store: Optional LocalStore for memory access.
         readings: Optional ReadingManager for live readings.
         gpio_reader: Optional GPIOReader for GPIO mode toggling.
+        observers: Optional loaded ObservationDomain plugins for the
+                   live domain-status card (e.g. vision).
+        frames: Optional FrameStore for camera keyframe search.
 
     Returns:
         Configured FastAPI application.
@@ -100,6 +105,8 @@ def create_app(
     app.state.readings = readings
     app.state.gpio_reader = gpio_reader
     app.state.discovery_manager = discovery_manager
+    app.state.observers = observers or []
+    app.state.frames = frames
 
     # Set up Jinja2 templates
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
@@ -172,6 +179,49 @@ def create_app(
             context["memories"] = store.search_memories("", limit=50)
 
         return templates.TemplateResponse(request, "memories.html", context)
+
+    @app.get("/frames", response_class=HTMLResponse)
+    async def frames_page(request: Request, query: str = ""):
+        """Camera keyframe search page."""
+        context = {
+            "node_name": config.node.name,
+            "page": "frames",
+            "query": query,
+            "frames_enabled": frames is not None,
+        }
+
+        if frames:
+            result = frames.search_text(query, limit=24)
+            context["search_mode"] = result["mode"]
+            context["frames"] = result["results"]
+            context["frame_stats"] = frames.get_stats()
+
+        return templates.TemplateResponse(request, "frames.html", context)
+
+    @app.get("/htmx/frames", response_class=HTMLResponse)
+    async def htmx_frames(request: Request, query: str = ""):
+        """HTMX partial for frame search results."""
+        context = {"frames": [], "search_mode": None, "query": query}
+        if frames:
+            result = frames.search_text(query, limit=24)
+            context["search_mode"] = result["mode"]
+            context["frames"] = result["results"]
+        return templates.TemplateResponse(
+            request, "partials/frames_results.html", context
+        )
+
+    @app.get("/frames/thumb/{frame_id}")
+    async def frame_thumbnail(frame_id: int):
+        """Serve a stored keyframe thumbnail."""
+        if not frames:
+            raise HTTPException(status_code=404, detail="Frame search not enabled")
+        frame = frames.get_frame(frame_id)
+        if not frame:
+            raise HTTPException(status_code=404, detail="Frame not found")
+        path = frames.thumbnail_path(frame)
+        if not path:
+            raise HTTPException(status_code=404, detail="No thumbnail for this frame")
+        return FileResponse(path, media_type="image/jpeg")
 
     # ==================== API Routes (JSON) ====================
 
@@ -358,6 +408,20 @@ def create_app(
 
         return templates.TemplateResponse(request, "node_detail.html", context)
 
+    @app.get("/observations/{observation_id}", response_class=HTMLResponse)
+    async def observation_detail_page(request: Request, observation_id: int):
+        """Observation detail / provenance page."""
+        if not store:
+            raise HTTPException(status_code=503, detail="No memory store available")
+        obs = store.get_observation_by_id(observation_id)
+        if obs is None:
+            raise HTTPException(status_code=404, detail="Observation not found")
+        return templates.TemplateResponse(
+            request,
+            "observation_detail.html",
+            {"node_name": config.node.name, "page": "observations", "obs": obs},
+        )
+
     @app.get("/htmx/observations", response_class=HTMLResponse)
     async def htmx_observations(request: Request, query: str = "", hours: int = 0):
         """HTMX partial for observations list."""
@@ -440,6 +504,40 @@ def create_app(
             request,
             "partials/stats.html",
             {"stats": stats},
+        )
+
+    @app.get("/htmx/domain-status", response_class=HTMLResponse)
+    async def htmx_domain_status(request: Request):
+        """HTMX partial for observation-domain live status (vision, audio, ...).
+
+        Status is derived on demand from stored reading history via each
+        domain's pure derive_state/derive_status, so it works even though the
+        dashboard runs in a separate process from the agent.
+        """
+        statuses = []
+        domains = app.state.observers
+        if store and domains:
+            for domain in domains:
+                try:
+                    history = [
+                        h for h in store.get_recent_readings(
+                            minutes=domain.status_lookback_minutes,
+                        )
+                        if domain.matches(h["full_id"])
+                    ]
+                    state = domain.derive_state(history)
+                    statuses.append({
+                        "domain": domain.domain_name,
+                        "status": domain.derive_status(state),
+                        "has_data": state.get("has_data", False),
+                    })
+                except Exception as e:
+                    logger.error(f"Domain status for '{domain.domain_name}' failed: {e}")
+
+        return templates.TemplateResponse(
+            request,
+            "partials/domain_status.html",
+            {"statuses": statuses},
         )
 
     return app

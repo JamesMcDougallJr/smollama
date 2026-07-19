@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from .config import Config
+from .frames import ClipTextEncoder, FrameSpool, FrameStore
 from .gpio_reader import GPIOReader
 from .memory import LocalStore, MockEmbeddings, ObservationLoop, OllamaEmbeddings
 from .mqtt_client import MQTTClient, Message
@@ -20,6 +21,7 @@ from .plugins.loader import PluginLoader
 from .readings import GPIOReadingProvider, MQTTBridgeProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
+from .tools.frame_tools import SearchFramesTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
 from .mem0 import Mem0Client, Mem0Bridge, CrossNodeRecallTool
 from .sync import CRDTLog, SyncClient
@@ -94,6 +96,32 @@ class Agent:
                     readings_max_age_days=config.memory.readings_max_age_days,
                     compact_memory_threshold_mb=config.memory.compact_memory_threshold_mb,
                     compact_batch_size=config.memory.compact_batch_size,
+                    domains_mode=config.memory.observation_domains_mode,
+                )
+
+        # Initialize frame search (edge relays a camera writer's spool; master
+        # indexes relayed frames — see docs/frame-search.md)
+        self._frames: FrameStore | None = None
+        self._frame_spool: FrameSpool | None = None
+        self._frames_retention_task: asyncio.Task | None = None
+        if config.frames.enabled:
+            if self._is_edge:
+                self._frame_spool = FrameSpool(
+                    spool_dir=config.frames.spool_dir,
+                    max_entries=config.frames.spool_max_entries,
+                )
+            else:
+                text_encoder = None
+                if config.frames.clip_text_model:
+                    text_encoder = ClipTextEncoder(
+                        model_path=config.frames.clip_text_model,
+                        tokenizer_path=config.frames.clip_tokenizer,
+                        context_length=config.frames.context_length,
+                    )
+                self._frames = FrameStore(
+                    db_path=config.frames.db_path,
+                    thumbnail_dir=config.frames.thumbnail_dir,
+                    text_encoder=text_encoder,
                 )
 
         # Initialize Mem0, sync, and discovery (all skipped in edge mode)
@@ -157,6 +185,8 @@ class Agent:
             self._tools.register(ObserveTool(self._memory))
             self._tools.register(PublishTool(self._mqtt))
             self._tools.register(GetRecentMessagesTool(self._mqtt))
+            if self._frames:
+                self._tools.register(SearchFramesTool(self._frames))
             if self._mem0_client:
                 self._tools.register(CrossNodeRecallTool(self._mem0_client))
             for write_plugin in self._plugin_loader.get_write_plugins():
@@ -174,6 +204,14 @@ class Agent:
         if self._memory:
             self._memory.connect()
             logger.info("Memory store connected")
+
+        # Connect frame store and start daily retention (master only)
+        if self._frames:
+            self._frames.connect()
+            self._frames_retention_task = asyncio.create_task(
+                self._frames_retention_loop()
+            )
+            logger.info("Frame store connected")
 
         # Connect to MQTT
         connected = await self._mqtt.connect()
@@ -260,12 +298,22 @@ class Agent:
             await self._discovery_manager.stop()
             logger.info("Discovery manager stopped")
 
+        # Stop frame retention and close frame store
+        if self._frames_retention_task is not None:
+            self._frames_retention_task.cancel()
+            try:
+                await self._frames_retention_task
+            except asyncio.CancelledError:
+                pass
+
         # Disconnect from services
         await self._mqtt.disconnect()
         self._gpio.cleanup()
         self._plugin_loader.shutdown_plugins()
         if self._memory:
             self._memory.close()
+        if self._frames:
+            self._frames.close()
 
         logger.info("Agent stopped")
 
@@ -295,6 +343,7 @@ class Agent:
             try:
                 readings = await self._readings.read_all()
                 if readings:
+                    include_metadata = self.config.agent.edge_include_metadata
                     payload = json.dumps(
                         {
                             "node": self.config.node.name,
@@ -311,6 +360,10 @@ class Agent:
                                     # makes cross-timezone readings look hours stale
                                     # and the node show "offline" while it is live.
                                     "ts": r.timestamp.astimezone().isoformat(),
+                                    # Metadata (e.g. detected-object lists) is opt-in:
+                                    # it can be large, and most deployments don't
+                                    # consume it on the master.
+                                    **({"metadata": r.metadata} if include_metadata and r.metadata else {}),
                                 }
                                 for r in readings
                             ],
@@ -323,7 +376,27 @@ class Agent:
                 break
             except Exception as e:
                 logger.error(f"Error in edge publish loop: {e}", exc_info=True)
+
+            if self._frame_spool:
+                try:
+                    await self._publish_frame_spool()
+                except Exception as e:
+                    logger.error(f"Error relaying frame spool: {e}", exc_info=True)
+
             await asyncio.sleep(interval)
+
+    async def _publish_frame_spool(self) -> None:
+        """Relay spooled camera keyframes to the master; delete after publish."""
+        entries = self._frame_spool.pop_batch(self.config.frames.publish_batch)
+        for entry in entries:
+            payload = json.dumps({
+                "node": self.config.node.name,
+                "frame": entry.payload,
+            })
+            await self._mqtt.publish("frames", payload)
+            self._frame_spool.remove(entry)
+        if entries:
+            logger.debug(f"Relayed {len(entries)} frames to MQTT")
 
     async def _handle_message(self, message: Message) -> None:
         """Handle an incoming MQTT message.
@@ -354,6 +427,19 @@ class Agent:
                     self._mqtt_bridge.ingest_edge_payload(node, data["readings"])
             except (json.JSONDecodeError, KeyError, IndexError):
                 pass
+            return
+
+        # Ingest relayed camera keyframes into the frame index, without
+        # running the LLM loop (same rationale as /readings above).
+        if message.topic.endswith("/frames"):
+            if self._frames:
+                try:
+                    data = json.loads(message.payload)
+                    parts = message.topic.split("/")
+                    node = parts[-2] if len(parts) >= 3 else data.get("node", "unknown")
+                    self._frames.ingest_payload(node, data)
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Malformed frame payload on {message.topic}: {e}")
             return
 
         # Build context for LLM
@@ -492,6 +578,29 @@ class Agent:
             results.append(format_tool_result(tool_call.name, result_str))
 
         return results
+
+    async def _frames_retention_loop(self) -> None:
+        """Daily frame retention: archive (if configured) then prune."""
+        cfg = self.config.frames
+        while True:
+            try:
+                # Archival copies files and may shell out (e.g. rclone) — keep
+                # it off the event loop
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: self._frames.prune(
+                        retention_days=cfg.retention_days,
+                        archive_dir=cfg.archive_dir or None,
+                        archive_command=cfg.archive_command or None,
+                    ),
+                )
+                if result["pruned"]:
+                    logger.info(f"Frame retention: {result}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Frame retention failed: {e}", exc_info=True)
+            await asyncio.sleep(24 * 3600)
 
     async def query(self, prompt: str) -> str | None:
         """Send a direct query to the agent.

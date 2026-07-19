@@ -1,0 +1,51 @@
+{% if search_mode == 'labels' and query %}
+<div class="mb-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2">
+    Semantic search unavailable — matching detected labels only
+</div>
+{% endif %}
+
+{% if frames %}
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+    {% for frame in frames %}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:border-teal-300 hover:shadow-md transition-all">
+        {% if frame.thumb_path %}
+        <img src="/frames/thumb/{{ frame.id }}" alt="{{ frame.labels | join(', ') or 'keyframe' }}"
+             loading="lazy" class="w-full aspect-video object-cover bg-slate-100">
+        {% else %}
+        <div class="w-full aspect-video bg-slate-100 flex items-center justify-center text-slate-400 text-sm">
+            no thumbnail
+        </div>
+        {% endif %}
+        <div class="p-3 space-y-1">
+            <div class="flex items-center justify-between gap-2">
+                <span class="reading-ts text-xs text-slate-500" data-ts="{{ frame.timestamp }}">{{ frame.timestamp }}</span>
+                {% if frame.similarity is not none %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                    {{ (frame.similarity * 100) | int }}%
+                </span>
+                {% endif %}
+            </div>
+            <div class="flex items-center flex-wrap gap-1">
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{{ frame.node_id }}</span>
+                {% for label in frame.labels[:3] %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700">{{ label }}</span>
+                {% endfor %}
+                {% if frame.trigger == 'heartbeat' %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-slate-50 text-slate-400">heartbeat</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-slate-400 py-12">
+    {% if query %}
+    <p class="text-lg">No matching frames</p>
+    <p class="mt-1 text-sm">Try a different description, or check that the camera node is relaying frames</p>
+    {% else %}
+    <p class="text-lg">No frames indexed yet</p>
+    <p class="mt-1 text-sm">Frames appear here once an edge camera node starts relaying embedded keyframes</p>
+    {% endif %}
+</div>
+{% endif %}

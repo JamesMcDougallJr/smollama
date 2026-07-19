@@ -57,6 +57,7 @@ class GPIOConfig:
 class AgentConfig:
     mode: str = "full"  # "full" (LLM-driven) or "edge" (sensor-push, no LLM)
     edge_publish_interval_seconds: int = 30
+    edge_include_metadata: bool = False  # include reading metadata in MQTT edge publishes
     system_prompt: str = (
         "You are a home automation assistant running on a Raspberry Pi. "
         "You can read GPIO sensors and communicate with other nodes via MQTT."
@@ -77,11 +78,36 @@ class MemoryConfig:
     observation_enabled: bool = True
     observation_interval_minutes: int = 15
     observation_lookback_minutes: int = 60
+    observation_domains_mode: str = "replace"  # "replace" (domain pass takes the cycle's one LLM call) or "parallel" (generic + each domain per cycle)
     sensor_log_retention_days: int = 90
     observation_max_age_days: int = 3    # delete observations older than this on each loop tick
     readings_max_age_days: int = 7       # delete readings older than this on each loop tick
     compact_memory_threshold_mb: int = 200  # run compaction when free RAM drops below this
     compact_batch_size: int = 20         # number of observations to summarize per compaction run
+
+
+@dataclass
+class FramesConfig:
+    """Configuration for CLIP frame search (see docs/frame-search.md).
+
+    Master settings apply when agent.mode is "full"; edge settings apply when
+    the node relays a camera writer's frame spool.
+    """
+
+    enabled: bool = False
+    # Master: index + search
+    db_path: str = "~/.smollama/frames.db"
+    thumbnail_dir: str = "~/.smollama/frames"
+    clip_text_model: str = ""     # path to exported CLIP text encoder .onnx
+    clip_tokenizer: str = ""      # path to bpe_simple_vocab_16e6.txt.gz
+    context_length: int = 77
+    retention_days: int = 30
+    archive_dir: str = ""         # "" = prune without archiving
+    archive_command: str = ""     # optional shell command run after staging (e.g. rclone)
+    # Edge: spool relay
+    spool_dir: str = "~/.smollama/frames_spool"
+    publish_batch: int = 5        # max frames relayed per edge publish cycle
+    spool_max_entries: int = 500  # oldest entries dropped beyond this
 
 
 @dataclass
@@ -164,6 +190,7 @@ class Config:
     gpio: GPIOConfig = field(default_factory=GPIOConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    frames: FramesConfig = field(default_factory=FramesConfig)
     sync: SyncConfig = field(default_factory=SyncConfig)
     mem0: Mem0Config = field(default_factory=Mem0Config)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
@@ -384,6 +411,10 @@ def load_config(config_path: str | Path | None = None) -> Config:
                         "edge_publish_interval_seconds",
                         config.agent.edge_publish_interval_seconds,
                     ),
+                    edge_include_metadata=agent_data.get(
+                        "edge_include_metadata",
+                        config.agent.edge_include_metadata,
+                    ),
                     system_prompt=agent_data.get(
                         "system_prompt", config.agent.system_prompt
                     ),
@@ -423,6 +454,10 @@ def load_config(config_path: str | Path | None = None) -> Config:
                         "observation_lookback_minutes",
                         config.memory.observation_lookback_minutes,
                     ),
+                    observation_domains_mode=mem_data.get(
+                        "observation_domains_mode",
+                        config.memory.observation_domains_mode,
+                    ),
                     sensor_log_retention_days=mem_data.get(
                         "sensor_log_retention_days",
                         config.memory.sensor_log_retention_days,
@@ -443,6 +478,25 @@ def load_config(config_path: str | Path | None = None) -> Config:
                         "compact_batch_size",
                         config.memory.compact_batch_size,
                     ),
+                )
+
+            # Parse frames config
+            if "frames" in data:
+                frames_data = data["frames"]
+                defaults = FramesConfig()
+                config.frames = FramesConfig(
+                    enabled=frames_data.get("enabled", defaults.enabled),
+                    db_path=frames_data.get("db_path", defaults.db_path),
+                    thumbnail_dir=frames_data.get("thumbnail_dir", defaults.thumbnail_dir),
+                    clip_text_model=frames_data.get("clip_text_model", defaults.clip_text_model),
+                    clip_tokenizer=frames_data.get("clip_tokenizer", defaults.clip_tokenizer),
+                    context_length=frames_data.get("context_length", defaults.context_length),
+                    retention_days=frames_data.get("retention_days", defaults.retention_days),
+                    archive_dir=frames_data.get("archive_dir", defaults.archive_dir),
+                    archive_command=frames_data.get("archive_command", defaults.archive_command),
+                    spool_dir=frames_data.get("spool_dir", defaults.spool_dir),
+                    publish_batch=frames_data.get("publish_batch", defaults.publish_batch),
+                    spool_max_entries=frames_data.get("spool_max_entries", defaults.spool_max_entries),
                 )
 
             # Parse sync config
