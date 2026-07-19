@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from smollama.plugins.base import (
+    ObservationDomain,
+    ObserverPlugin,
     PluginLifecycleMixin,
     PluginMetadata,
     ReadPlugin,
@@ -192,8 +194,13 @@ class PluginLoader:
                 and not inspect.isabstract(obj)
                 and not is_readwrite
             )
+            is_observer = (
+                issubclass(obj, ObserverPlugin)
+                and obj is not ObserverPlugin
+                and not inspect.isabstract(obj)
+            )
 
-            if not (is_read or is_write or is_readwrite):
+            if not (is_read or is_write or is_readwrite or is_observer):
                 continue
 
             # Validate plugin has required methods/properties
@@ -355,6 +362,17 @@ class PluginLoader:
         return [
             p for p in self._loaded_plugins.values()
             if isinstance(p, Tool) and isinstance(p, PluginLifecycleMixin)
+        ]
+
+    def get_observer_plugins(self) -> list[ObserverPlugin]:
+        """Get all loaded observation-domain plugins.
+
+        Returns:
+            List of plugins that implement ObservationDomain.
+        """
+        return [
+            p for p in self._loaded_plugins.values()
+            if isinstance(p, ObservationDomain)
         ]
 
     # Backwards compatibility aliases

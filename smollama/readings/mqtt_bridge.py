@@ -42,13 +42,16 @@ class MQTTBridgeProvider(ReadingProvider):
                 ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now()
             except (ValueError, TypeError):
                 ts = datetime.now()
+            metadata = {"node": node}
+            if isinstance(item.get("metadata"), dict):
+                metadata.update(item["metadata"])
             self._cache[cache_key] = Reading(
                 source_type=node,
                 source_id=source,
                 value=item.get("value"),
                 timestamp=ts,
                 unit=item.get("unit"),
-                metadata={"node": node},
+                metadata=metadata,
             )
         self._persist()
 
@@ -72,6 +75,7 @@ class MQTTBridgeProvider(ReadingProvider):
                 "value": r.value,
                 "timestamp": r.timestamp.isoformat(),
                 "unit": r.unit,
+                "metadata": r.metadata,
             }
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._cache_path.with_suffix(".tmp")
@@ -90,13 +94,14 @@ class MQTTBridgeProvider(ReadingProvider):
                     ts = datetime.fromisoformat(item["timestamp"])
                 except (ValueError, KeyError):
                     ts = datetime.now()
+                metadata = item.get("metadata") or {"node": item["node"]}
                 readings.append(Reading(
                     source_type=item["node"],
                     source_id=item["source"],
                     value=item.get("value"),
                     timestamp=ts,
                     unit=item.get("unit"),
-                    metadata={"node": item["node"]},
+                    metadata=metadata,
                 ))
             return readings
         except (json.JSONDecodeError, KeyError):

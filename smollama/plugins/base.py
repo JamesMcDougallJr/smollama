@@ -115,6 +115,78 @@ class ObservationHook:
         """
 
 
+class ObservationDomain:
+    """Mixin for plugins that provide domain-specific observation generation.
+
+    A domain claims readings by full_id pattern (e.g. all jetson_inference
+    sources regardless of which node relayed them), tracks deterministic state
+    from reading history, and builds a focused LLM prompt for the observation
+    loop. Claimed sources are excluded from the generic observation pass.
+
+    All state derivation must be pure (history in, state out) so that both the
+    agent process and the separate dashboard process can compute status from
+    stored readings alone.
+    """
+
+    @property
+    def domain_name(self) -> str:
+        """Short domain identifier, e.g. 'vision' or 'audio'."""
+        raise NotImplementedError
+
+    def matches(self, full_id: str) -> bool:
+        """Return True if this domain claims the given reading full_id.
+
+        On a master node, relayed edge readings look like
+        'pipi:jetson_inference:person_count', so matching must be
+        pattern-based on the full_id, not on source_type.
+        """
+        raise NotImplementedError
+
+    def describe_sources(self) -> dict[str, str]:
+        """Semantic descriptions of known source names, for prompt context.
+
+        Keys are bare source names (e.g. 'person_count'), matched against the
+        tail of a full_id.
+        """
+        return {}
+
+    def derive_state(self, history: list[dict], now: Any = None) -> dict[str, Any]:
+        """Derive deterministic domain state from reading history.
+
+        Args:
+            history: Reading dicts (full_id, timestamp, value, unit) for
+                     claimed sources, as returned by the store.
+            now: Reference datetime for age computations (default: now).
+
+        Returns:
+            Domain-specific state dict fed into build_prompt/derive_status.
+        """
+        raise NotImplementedError
+
+    def build_prompt(
+        self,
+        state: dict[str, Any],
+        current_readings: list,
+        history: list[dict],
+        past_observations: list[dict],
+        lookback_minutes: int,
+    ) -> str:
+        """Build the domain-focused LLM prompt for one observation pass."""
+        raise NotImplementedError
+
+    def derive_status(self, state: dict[str, Any]) -> str:
+        """One-line human-readable status from derived state.
+
+        E.g. 'No humans detected in the past 3h (last seen 14:32)'.
+        """
+        raise NotImplementedError
+
+    @property
+    def status_lookback_minutes(self) -> int:
+        """How much reading history derive_state needs for a meaningful status."""
+        return 180
+
+
 class ReadPlugin(PluginLifecycleMixin, ReadingProvider):
     """Plugin that ingests data into smollama.
 
@@ -238,6 +310,21 @@ class ReadWritePlugin(PluginLifecycleMixin, ReadingProvider, Tool):
         Default implementation returns [self].
         """
         return [self]
+
+
+class ObserverPlugin(PluginLifecycleMixin, ObservationDomain):
+    """Plugin that specializes observation generation for a domain.
+
+    Observer plugins neither read sensors nor expose tools — they teach the
+    master's observation loop how to interpret a family of sources (claimed by
+    full_id pattern) and how to prompt the LLM about them. They run on the
+    master node, have no hardware dependencies, and are disabled by default.
+
+    Example: a vision observer that claims '*jetson_inference*' sources and
+    prompts for camera-centric summaries ('No humans detected in the past 3h')
+    instead of generic numeric-trend analysis.
+    """
+    pass
 
 
 # Backwards compatibility aliases

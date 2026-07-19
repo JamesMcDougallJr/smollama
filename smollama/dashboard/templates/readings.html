@@ -31,6 +31,11 @@
         </div>
     </div>
 
+    <!-- Observation domain live status (empty unless observer plugins enabled) -->
+    <div hx-get="/htmx/domain-status"
+         hx-trigger="load, every 30s [!document.body.classList.contains('refresh-paused')]"
+         hx-swap="innerHTML"></div>
+
     <!-- Node Filter Bar -->
     {% if nodes %}
     <div class="flex flex-wrap gap-2 items-center">

@@ -1,5 +1,6 @@
 """Builtin plugins for smollama."""
 
+from smollama.plugins.builtin.audio_observation_plugin import AudioObservationPlugin
 from smollama.plugins.builtin.dht11_plugin import DHT11SensorPlugin
 from smollama.plugins.builtin.gpio_plugin import GPIOSensorPlugin
 from smollama.plugins.builtin.led_plugin import LEDPlugin
@@ -10,8 +11,10 @@ from smollama.plugins.builtin.s5161as_plugin import S5161ASPlugin, S5161ASPi5Plu
 from smollama.plugins.builtin.sh5461as_plugin import SH5461ASPlugin, SH5461ASPi5Plugin
 from smollama.plugins.builtin.jetson_inference_plugin import JetsonInferencePlugin
 from smollama.plugins.builtin.system_plugin import SystemSensorPlugin
+from smollama.plugins.builtin.vision_observation_plugin import VisionObservationPlugin
 
 __all__ = [
+    "AudioObservationPlugin",
     "DHT11SensorPlugin",
     "GPIOSensorPlugin",
     "JetsonInferencePlugin",
@@ -24,4 +27,5 @@ __all__ = [
     "SH5461ASPlugin",
     "SH5461ASPi5Plugin",  # backwards compat alias
     "SystemSensorPlugin",
+    "VisionObservationPlugin",
 ]

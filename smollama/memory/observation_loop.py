@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from ..plugins.base import ObservationHook
 from ..readings import ReadingManager
 
 if TYPE_CHECKING:
     from ..agent import Agent
+    from ..plugins.base import ObservationDomain, ObservationHook
     from .local_store import LocalStore
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class ObservationLoop:
         readings_max_age_days: int = 7,
         compact_memory_threshold_mb: int = 200,
         compact_batch_size: int = 20,
+        domains_mode: str = "replace",
     ):
         """Initialize the observation loop.
 
@@ -77,11 +79,17 @@ class ObservationLoop:
             interval_minutes: How often to generate observations.
             lookback_minutes: How far back to look for context.
             plugins: Loaded plugin instances. Any that implement ObservationHook
-                     will receive on_observation_begin/end callbacks each cycle.
+                     will receive on_observation_begin/end callbacks each cycle;
+                     any that implement ObservationDomain get domain-focused
+                     observation passes over the sources they claim.
             observation_max_age_days: Delete observations older than this on each tick.
             readings_max_age_days: Delete readings older than this on each tick.
             compact_memory_threshold_mb: Compact when free RAM drops below this (MB).
             compact_batch_size: Number of observations to summarize per compaction run.
+            domains_mode: "replace" — an active domain pass takes the cycle's single
+                          LLM call (rotating among active domains), for
+                          memory-constrained nodes; "parallel" — generic + every
+                          active domain pass run each cycle.
         """
         self._store = store
         self._readings = readings
@@ -92,16 +100,33 @@ class ObservationLoop:
         self._readings_max_age_days = readings_max_age_days
         self._compact_threshold_mb = compact_memory_threshold_mb
         self._compact_batch_size = compact_batch_size
+        self._domains_mode = domains_mode
+        self._domain_rotation = 0  # replace-mode round-robin cursor
+        # Imported here rather than at module level: plugins.base transitively
+        # imports this module (via tools -> memory), so a top-level import is
+        # circular when the plugins package is imported first.
+        from ..plugins.base import ObservationDomain, ObservationHook
+
         self._hooks: list[ObservationHook] = [
             p for p in (plugins or []) if isinstance(p, ObservationHook)
+        ]
+        self._domains: list[ObservationDomain] = [
+            p for p in (plugins or []) if isinstance(p, ObservationDomain)
         ]
         if self._hooks:
             logger.info(
                 "Observation hooks registered: %s",
                 ", ".join(type(h).__name__ for h in self._hooks),
             )
+        if self._domains:
+            logger.info(
+                "Observation domains registered (%s mode): %s",
+                self._domains_mode,
+                ", ".join(d.domain_name for d in self._domains),
+            )
         self._task: asyncio.Task | None = None
         self._running = False
+        self.session_id = str(uuid.uuid4())
 
     async def start(self) -> None:
         """Start the observation loop as a background task."""
@@ -111,8 +136,8 @@ class ObservationLoop:
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
         logger.info(
-            f"Observation loop started (interval={self._interval // 60}min, "
-            f"lookback={self._lookback}min)"
+            f"Observation loop started (session={self.session_id}, "
+            f"interval={self._interval // 60}min, lookback={self._lookback}min)"
         )
 
     async def stop(self) -> None:
@@ -177,43 +202,129 @@ class ObservationLoop:
             return
 
         # Log readings to database
-        self._store.log_readings(current_readings)
+        self._store.log_readings(current_readings, session_id=self.session_id)
 
-        # 2. Get recent reading history
+        # 2. Get recent reading history (shared by all passes)
         recent_history = self._store.get_recent_readings(
             minutes=self._lookback,
             source_types=None,  # All types
         )
 
-        # 3. Get relevant past observations
-        # Search for observations related to current sources
-        source_ids = [r.full_id for r in current_readings]
+        # 3. Partition readings between domains and the generic pass.
+        # A domain is active when it claims any current or recent reading
+        # (recent-only means the source went quiet — worth observing too).
+        claimed_ids: set[str] = set()
+        active_domains: list["ObservationDomain"] = []
+        for domain in self._domains:
+            current_claimed = [r for r in current_readings if domain.matches(r.full_id)]
+            history_claimed = [h for h in recent_history if domain.matches(h["full_id"])]
+            if current_claimed or history_claimed:
+                active_domains.append(domain)
+            claimed_ids.update(r.full_id for r in current_claimed)
+            claimed_ids.update(h["full_id"] for h in history_claimed)
+
+        generic_readings = [r for r in current_readings if r.full_id not in claimed_ids]
+        generic_history = [h for h in recent_history if h["full_id"] not in claimed_ids]
+
+        # 4. Dispatch passes according to mode
+        if not active_domains:
+            await self._run_generic_pass(current_readings, recent_history)
+        elif self._domains_mode == "parallel":
+            for domain in active_domains:
+                await self._run_domain_pass(domain, current_readings, recent_history)
+            if generic_readings:
+                await self._run_generic_pass(generic_readings, generic_history)
+        else:  # "replace": one focused pass per cycle, rotating among active domains
+            domain = active_domains[self._domain_rotation % len(active_domains)]
+            self._domain_rotation += 1
+            await self._run_domain_pass(domain, current_readings, recent_history)
+
+    async def _run_generic_pass(
+        self,
+        readings: list,
+        history: list[dict],
+    ) -> None:
+        """Run the generic observation pass over the given readings."""
+        source_ids = [r.full_id for r in readings]
         past_obs = self._store.search_observations(
             query=" ".join(source_ids),
             limit=5,
         )
 
-        # 4. Format prompt
         prompt = OBSERVATION_PROMPT.format(
             lookback_minutes=self._lookback,
-            current_readings=self._format_current_readings(current_readings),
-            recent_history=self._format_history(recent_history),
+            current_readings=self._format_current_readings(readings),
+            recent_history=self._format_history(history),
             past_observations=self._format_past_observations(past_obs),
         )
 
-        # 5. Run LLM query (with graceful degradation)
+        await self._query_and_store(prompt, readings, pass_name="generic")
+
+    async def _run_domain_pass(
+        self,
+        domain: "ObservationDomain",
+        current_readings: list,
+        recent_history: list[dict],
+    ) -> None:
+        """Run one domain-focused observation pass."""
+        claimed_current = [r for r in current_readings if domain.matches(r.full_id)]
+        claimed_history = [h for h in recent_history if domain.matches(h["full_id"])]
+
+        try:
+            state = domain.derive_state(claimed_history)
+            past_obs = self._store.search_observations(
+                query=domain.domain_name,
+                limit=5,
+            )
+            prompt = domain.build_prompt(
+                state=state,
+                current_readings=claimed_current,
+                history=claimed_history,
+                past_observations=past_obs,
+                lookback_minutes=self._lookback,
+            )
+        except Exception as e:
+            logger.error(
+                f"Domain '{domain.domain_name}' prompt construction failed: {e}",
+                exc_info=True,
+            )
+            return
+
+        await self._query_and_store(
+            prompt, claimed_current, pass_name=domain.domain_name
+        )
+
+    async def _query_and_store(
+        self,
+        prompt: str,
+        readings: list,
+        pass_name: str,
+    ) -> None:
+        """Run the LLM query for one pass and store the parsed results."""
+        input_snapshot = [
+            {
+                "full_id": r.full_id,
+                "value": r.value,
+                "unit": r.unit,
+                "timestamp": r.timestamp.isoformat(),
+            }
+            for r in readings
+        ]
+
         try:
             response = await self._agent.query(prompt)
 
             if not response:
-                logger.warning("No response from LLM for observation - operating in degraded mode")
+                logger.warning(
+                    f"No response from LLM for {pass_name} observation pass "
+                    "- operating in degraded mode"
+                )
                 return
 
-            # 6. Parse and store observations
-            await self._process_response(response)
+            await self._process_response(response, self.session_id, input_snapshot)
 
         except Exception as e:
-            logger.error(f"LLM query failed during observation: {e}")
+            logger.error(f"LLM query failed during {pass_name} observation pass: {e}")
             # Continue loop - sensor logging already completed
 
     @staticmethod
@@ -320,7 +431,12 @@ class ObservationLoop:
 
         return "\n".join(lines)
 
-    async def _process_response(self, response: str) -> None:
+    async def _process_response(
+        self,
+        response: str,
+        session_id: str,
+        input_snapshot: list[dict],
+    ) -> None:
         """Parse LLM response and store observations/memories."""
         import json
 
@@ -344,6 +460,8 @@ class ObservationLoop:
                     observation_type=obs.get("type", "general"),
                     confidence=obs.get("confidence", 0.8),
                     related_sources=obs.get("related_sources"),
+                    session_id=session_id,
+                    input_snapshot=input_snapshot,
                 )
                 logger.info(f"Recorded observation: {obs['text'][:50]}...")
 
@@ -367,6 +485,8 @@ class ObservationLoop:
                     text=response[:500],
                     observation_type="general",
                     confidence=0.6,
+                    session_id=session_id,
+                    input_snapshot=input_snapshot,
                 )
                 logger.debug("Stored raw response as observation")
         except Exception as e:

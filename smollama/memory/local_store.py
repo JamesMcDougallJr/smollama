@@ -113,6 +113,18 @@ class LocalStore:
         self._conn.executescript(SCHEMA)
         self._conn.commit()
 
+        # Migrate: add session/provenance columns if they don't exist
+        for stmt in [
+            "ALTER TABLE observations ADD COLUMN session_id TEXT",
+            "ALTER TABLE observations ADD COLUMN input_snapshot TEXT",
+            "ALTER TABLE readings_log ADD COLUMN session_id TEXT",
+        ]:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        self._conn.commit()
+
         # Try to load sqlite-vec extension
         self._init_vector_tables()
 
@@ -198,11 +210,12 @@ class LocalStore:
 
         return cursor.lastrowid
 
-    def log_readings(self, readings: list[Reading]) -> int:
+    def log_readings(self, readings: list[Reading], session_id: str | None = None) -> int:
         """Log multiple readings in a single transaction.
 
         Args:
             readings: List of Reading objects to store.
+            session_id: Optional session UUID to tag all readings with.
 
         Returns:
             Number of readings inserted.
@@ -227,14 +240,15 @@ class LocalStore:
                 r.unit,
                 json.dumps(r.metadata) if r.metadata else None,
                 self.node_id,
+                session_id,
             ))
 
         conn.executemany(
             """
             INSERT INTO readings_log (
                 timestamp, source_type, source_id, value,
-                value_numeric, unit, metadata, node_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                value_numeric, unit, metadata, node_id, session_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -345,6 +359,8 @@ class LocalStore:
         observation_type: str = "general",
         confidence: float = 0.8,
         related_sources: list[str] | None = None,
+        session_id: str | None = None,
+        input_snapshot: list[dict] | None = None,
     ) -> int:
         """Store an observation with embedding.
 
@@ -353,6 +369,8 @@ class LocalStore:
             observation_type: Category (e.g., "pattern", "anomaly", "general").
             confidence: Confidence score 0-1.
             related_sources: List of source IDs this observation relates to.
+            session_id: Optional session UUID identifying the agent run.
+            input_snapshot: Optional list of reading dicts that were fed to the LLM.
 
         Returns:
             Row ID of the inserted observation.
@@ -365,8 +383,8 @@ class LocalStore:
             """
             INSERT INTO observations (
                 timestamp, text, confidence, observation_type,
-                related_sources, node_id
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                related_sources, node_id, session_id, input_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 timestamp,
@@ -375,6 +393,8 @@ class LocalStore:
                 observation_type,
                 json.dumps(related_sources) if related_sources else None,
                 self.node_id,
+                session_id,
+                json.dumps(input_snapshot) if input_snapshot is not None else None,
             ),
         )
         observation_id = cursor.lastrowid
@@ -422,6 +442,7 @@ class LocalStore:
             SELECT
                 o.id, o.timestamp, o.text, o.confidence,
                 o.observation_type, o.related_sources,
+                o.session_id, o.input_snapshot,
                 v.distance
             FROM observations_vec v
             JOIN observations o ON o.id = v.observation_id
@@ -445,6 +466,8 @@ class LocalStore:
                 "confidence": row["confidence"],
                 "type": row["observation_type"],
                 "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
+                "session_id": row["session_id"],
+                "input_snapshot": json.loads(row["input_snapshot"]) if row["input_snapshot"] else None,
                 "similarity": (1 - row["distance"]) if row["distance"] is not None else None,
             })
 
@@ -465,7 +488,7 @@ class LocalStore:
         if observation_type and from_ts:
             cursor = conn.execute(
                 """
-                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                SELECT id, timestamp, text, confidence, observation_type, related_sources, session_id, input_snapshot
                 FROM observations
                 WHERE text LIKE ? AND observation_type = ? AND timestamp >= ?
                 ORDER BY timestamp DESC
@@ -476,7 +499,7 @@ class LocalStore:
         elif observation_type:
             cursor = conn.execute(
                 """
-                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                SELECT id, timestamp, text, confidence, observation_type, related_sources, session_id, input_snapshot
                 FROM observations
                 WHERE text LIKE ? AND observation_type = ?
                 ORDER BY timestamp DESC
@@ -487,7 +510,7 @@ class LocalStore:
         elif from_ts:
             cursor = conn.execute(
                 """
-                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                SELECT id, timestamp, text, confidence, observation_type, related_sources, session_id, input_snapshot
                 FROM observations
                 WHERE text LIKE ? AND timestamp >= ?
                 ORDER BY timestamp DESC
@@ -498,7 +521,7 @@ class LocalStore:
         else:
             cursor = conn.execute(
                 """
-                SELECT id, timestamp, text, confidence, observation_type, related_sources
+                SELECT id, timestamp, text, confidence, observation_type, related_sources, session_id, input_snapshot
                 FROM observations
                 WHERE text LIKE ?
                 ORDER BY timestamp DESC
@@ -516,10 +539,44 @@ class LocalStore:
                 "confidence": row["confidence"],
                 "type": row["observation_type"],
                 "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
+                "session_id": row["session_id"],
+                "input_snapshot": json.loads(row["input_snapshot"]) if row["input_snapshot"] else None,
                 "similarity": None,
             })
 
         return results
+
+    def get_observation_by_id(self, observation_id: int) -> dict[str, Any] | None:
+        """Fetch a single observation by primary key.
+
+        Args:
+            observation_id: The observation row ID.
+
+        Returns:
+            Observation dict or None if not found.
+        """
+        conn = self._ensure_connected()
+        row = conn.execute(
+            """
+            SELECT id, timestamp, text, confidence, observation_type,
+                   related_sources, session_id, input_snapshot, node_id
+            FROM observations WHERE id = ?
+            """,
+            (observation_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "text": row["text"],
+            "confidence": row["confidence"],
+            "type": row["observation_type"],
+            "related_sources": json.loads(row["related_sources"]) if row["related_sources"] else None,
+            "session_id": row["session_id"],
+            "input_snapshot": json.loads(row["input_snapshot"]) if row["input_snapshot"] else None,
+            "node_id": row["node_id"],
+        }
 
     def get_observations_since_id(
         self,

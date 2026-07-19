@@ -10,6 +10,11 @@
         <p class="mt-1 text-slate-500">Overview of {{ node_name }}</p>
     </div>
 
+    <!-- Observation domain live status (empty unless observer plugins enabled) -->
+    <div hx-get="/htmx/domain-status"
+         hx-trigger="load, every 30s [!document.body.classList.contains('refresh-paused')]"
+         hx-swap="innerHTML"></div>
+
     <!-- Stats Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"
          hx-get="/htmx/stats"

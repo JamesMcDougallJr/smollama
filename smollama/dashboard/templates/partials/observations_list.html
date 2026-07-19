@@ -1,6 +1,7 @@
 {% if observations %}
     {% for obs in observations %}
-    <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+    <a href="/observations/{{ obs.id }}" class="block group">
+    <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm group-hover:border-teal-300 group-hover:shadow-md transition-all">
         <div class="flex items-start justify-between">
             <div class="flex-1">
                 <p class="text-slate-900">{{ obs.text }}</p>
@@ -32,6 +33,7 @@
         </div>
         {% endif %}
     </div>
+    </a>
     {% endfor %}
 {% else %}
     <div class="text-center text-slate-400 py-12">

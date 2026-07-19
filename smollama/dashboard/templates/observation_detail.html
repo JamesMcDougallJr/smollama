@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Observation #{{ obs.id }}{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Back link + header -->
+    <div>
+        <a href="/observations" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-teal-600 transition-colors mb-4">
+            ← Back to Observations
+        </a>
+        <div class="flex items-center gap-3">
+            <h1 class="text-2xl font-bold text-slate-900">Observation #{{ obs.id }}</h1>
+            <span class="px-2.5 py-1 rounded-full text-sm font-medium
+                {% if obs.type == 'anomaly' %}bg-red-100 text-red-700
+                {% elif obs.type == 'pattern' %}bg-purple-100 text-purple-700
+                {% elif obs.type == 'status' %}bg-teal-100 text-teal-700
+                {% elif obs.type == 'summary' %}bg-amber-100 text-amber-700
+                {% else %}bg-slate-100 text-slate-600{% endif %}">
+                {{ obs.type }}
+            </span>
+        </div>
+    </div>
+
+    <!-- Metadata cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Confidence</p>
+            <p class="mt-1 text-2xl font-bold text-slate-700">{{ (obs.confidence * 100)|int }}%</p>
+        </div>
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Timestamp</p>
+            <p class="mt-1 text-lg font-semibold text-slate-700 truncate">
+                {{ obs.timestamp[:19] | replace('T', ' ') }}
+            </p>
+        </div>
+        <div class="bg-white rounded-xl p-5 border border-slate-200 shadow-sm">
+            <p class="text-xs font-medium text-slate-400 uppercase tracking-wider">Node</p>
+            <p class="mt-1 text-lg font-semibold text-slate-700 truncate">{{ obs.node_id }}</p>
+        </div>
+    </div>
+
+    <!-- Observation text -->
+    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Observation</p>
+        <p class="text-slate-900 text-base leading-relaxed">{{ obs.text }}</p>
+    </div>
+
+    <!-- Provenance -->
+    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Provenance</p>
+        <div class="space-y-2">
+            <div class="flex items-center gap-3">
+                <span class="text-sm text-slate-500 w-28 shrink-0">Session ID</span>
+                {% if obs.session_id %}
+                <span class="font-mono text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">{{ obs.session_id }}</span>
+                {% else %}
+                <span class="text-sm text-slate-400 italic">not recorded</span>
+                {% endif %}
+            </div>
+            {% if obs.related_sources %}
+            <div class="flex items-start gap-3">
+                <span class="text-sm text-slate-500 w-28 shrink-0 pt-1">Related sources</span>
+                <div class="flex flex-wrap gap-2">
+                    {% for source in obs.related_sources %}
+                    <span class="px-2 py-1 text-xs rounded-full bg-slate-100 text-slate-500">{{ source }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Input snapshot -->
+    <div class="bg-white rounded-xl p-6 border border-slate-200 shadow-sm">
+        <p class="text-xs font-medium text-slate-400 uppercase tracking-wider mb-3">Input Snapshot</p>
+        <p class="text-xs text-slate-400 mb-4">Sensor readings that were fed to the LLM when this observation was generated.</p>
+
+        {% if obs.input_snapshot %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="border-b border-slate-100">
+                        <th class="text-left text-xs font-medium text-slate-400 uppercase tracking-wider pb-2 pr-6">Source</th>
+                        <th class="text-left text-xs font-medium text-slate-400 uppercase tracking-wider pb-2 pr-6">Value</th>
+                        <th class="text-left text-xs font-medium text-slate-400 uppercase tracking-wider pb-2 pr-6">Unit</th>
+                        <th class="text-left text-xs font-medium text-slate-400 uppercase tracking-wider pb-2">Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-50">
+                    {% for reading in obs.input_snapshot %}
+                    <tr>
+                        <td class="py-2.5 pr-6">
+                            <span class="font-mono text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded">{{ reading.full_id }}</span>
+                        </td>
+                        <td class="py-2.5 pr-6 font-semibold text-slate-800">{{ reading.value }}</td>
+                        <td class="py-2.5 pr-6 text-slate-500">{{ reading.unit or '—' }}</td>
+                        <td class="py-2.5 text-slate-400 text-xs">{{ reading.timestamp[:19] | replace('T', ' ') }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center text-slate-400 py-8">
+            <p class="text-sm">No input snapshot recorded</p>
+            <p class="text-xs mt-1">Snapshots are captured for observations generated after the provenance feature was added.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
