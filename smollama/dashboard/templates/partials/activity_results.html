@@ -1,0 +1,48 @@
+{% if windows %}
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+    {% for win in windows %}
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:border-teal-300 hover:shadow-md transition-all">
+        {% if win.thumb_path %}
+        <img src="/frames/thumb/{{ win.id }}" alt="{{ win.activity_category or 'unmatched window' }}"
+             loading="lazy" class="w-full aspect-video object-cover bg-slate-100">
+        {% else %}
+        <div class="w-full aspect-video bg-slate-100 flex items-center justify-center text-slate-400 text-sm">
+            no thumbnail
+        </div>
+        {% endif %}
+        <div class="p-3 space-y-1">
+            <div class="flex items-center justify-between gap-2">
+                <span class="reading-ts text-xs text-slate-500" data-ts="{{ win.window_end or win.timestamp }}">
+                    {{ win.window_start or win.timestamp }} – {{ win.window_end or win.timestamp }}
+                </span>
+                {% if win.activity_score is not none %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-700 border border-teal-200">
+                    {{ (win.activity_score * 100) | int }}%
+                </span>
+                {% endif %}
+            </div>
+            <div class="flex items-center flex-wrap gap-1">
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{{ win.node_id }}</span>
+                {% if win.activity_category %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-teal-100 text-teal-700">{{ win.activity_category }}</span>
+                {% else %}
+                <span class="px-1.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-400">no match</span>
+                {% endif %}
+            </div>
+            {% if win.meta %}
+            <p class="text-xs text-slate-500">
+                {% if win.meta.person_max is not none %}{{ win.meta.person_max }} people max{% endif %}
+                {% if win.labels %} · {{ win.labels[:3] | join(', ') }}{% endif %}
+                {% if win.meta.samples %} · {{ win.meta.samples }} samples{% endif %}
+            </p>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="text-center text-slate-400 py-12">
+    <p class="text-lg">No matched activity in this window</p>
+    <p class="mt-1 text-sm">Windows appear here once an edge camera node relays temporal embeddings and a prompt file is configured (frames.activity_prompts)</p>
+</div>
+{% endif %}

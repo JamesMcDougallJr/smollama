@@ -210,6 +210,40 @@ def create_app(
             request, "partials/frames_results.html", context
         )
 
+    @app.get("/activity", response_class=HTMLResponse)
+    async def activity_page(
+        request: Request, category: str = "", hours: int = 24, min_score: float | None = None
+    ):
+        """Zero-shot activity triage review page."""
+        context = {
+            "node_name": config.node.name,
+            "page": "activity",
+            "category": category,
+            "hours": hours,
+            "min_score": min_score,
+            "frames_enabled": frames is not None,
+        }
+        if frames:
+            context["windows"] = frames.recent_activity(
+                hours=hours, category=category or None, min_score=min_score
+            )
+            context["categories"] = frames.activity_categories()
+        return templates.TemplateResponse(request, "activity.html", context)
+
+    @app.get("/htmx/activity", response_class=HTMLResponse)
+    async def htmx_activity(
+        request: Request, category: str = "", hours: int = 24, min_score: float | None = None
+    ):
+        """HTMX partial for the activity review list."""
+        context = {"windows": [], "category": category, "hours": hours}
+        if frames:
+            context["windows"] = frames.recent_activity(
+                hours=hours, category=category or None, min_score=min_score
+            )
+        return templates.TemplateResponse(
+            request, "partials/activity_results.html", context
+        )
+
     @app.get("/frames/thumb/{frame_id}")
     async def frame_thumbnail(frame_id: int):
         """Serve a stored keyframe thumbnail."""

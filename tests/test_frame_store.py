@@ -199,6 +199,153 @@ class TestRetention:
         assert store.get_frame(old_id) is not None
 
 
+class TestWindows:
+    def test_v1_payload_defaults_to_keyframe(self, store):
+        frame_id = store.add_frame("pipi", ts_days_ago(0), one_hot(0))
+        frame = store.get_frame(frame_id)
+        assert frame["kind"] == "keyframe"
+        assert frame["window_start"] is None
+        assert frame["meta"] is None
+
+    def test_ingest_window_payload(self, store):
+        payload = {
+            "node": "jetson1",
+            "frame": {
+                "ts": ts_days_ago(0),
+                "trigger": "window",
+                "model": "test-clip",
+                "dim": DIM,
+                "embedding": one_hot(0),
+                "labels": ["person"],
+                "kind": "window",
+                "schema_version": 2,
+                "window": {
+                    "start": ts_days_ago(0.001),
+                    "end": ts_days_ago(0),
+                    "samples": 4,
+                    "person_max": 2,
+                    "person_mean": 1.5,
+                    "actionness": 1.5,
+                },
+            },
+        }
+        frame_id = store.ingest_payload("jetson1", payload)
+        assert frame_id is not None
+
+        frame = store.get_frame(frame_id)
+        assert frame["kind"] == "window"
+        assert frame["window_start"] == payload["frame"]["window"]["start"]
+        assert frame["window_end"] == payload["frame"]["window"]["end"]
+        assert frame["meta"]["samples"] == 4
+        assert frame["meta"]["person_max"] == 2
+
+    def test_migration_adds_columns_to_old_schema(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "frames.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.executescript(
+            """
+            CREATE TABLE frames (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                trigger TEXT,
+                labels TEXT,
+                model TEXT,
+                thumb_path TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE frames_meta (key TEXT PRIMARY KEY, value TEXT);
+            """
+        )
+        conn.execute(
+            "INSERT INTO frames (node_id, timestamp, labels) VALUES (?, ?, ?)",
+            ("pipi", ts_days_ago(0), '["cat"]'),
+        )
+        conn.commit()
+        conn.close()
+
+        store = FrameStore(db_path, tmp_path / "thumbs")
+        store.connect()
+        try:
+            recent = store.recent(5)
+            assert len(recent) == 1
+            assert recent[0]["kind"] == "keyframe"
+            assert recent[0]["labels"] == ["cat"]
+        finally:
+            store.close()
+
+
+class TestActivityScores:
+    def _result(self, top="crowd_forming", top_score=0.3, matched=True):
+        return {
+            "scores": {"crowd_forming": top_score, "altercation": 0.1},
+            "distractors": {"empty_scene": 0.05},
+            "top_category": top,
+            "top_score": top_score,
+            "matched": matched,
+            "prompts_hash": "abc123",
+        }
+
+    def test_add_and_query_recent_activity(self, store):
+        frame_id = store.add_frame(
+            "jetson1", ts_days_ago(0), one_hot(0), kind="window",
+            window_start=ts_days_ago(0.001), window_end=ts_days_ago(0),
+            meta={"samples": 3, "person_max": 4},
+        )
+        store.add_activity_scores(frame_id, self._result())
+
+        frame = store.get_frame(frame_id)
+        assert frame["activity_category"] == "crowd_forming"
+        assert frame["activity_score"] == pytest.approx(0.3)
+
+        scores = store.get_activity_scores(frame_id)
+        names = {row["category"] for row in scores}
+        assert names == {"crowd_forming", "altercation", "empty_scene"}
+
+        recent = store.recent_activity(hours=24)
+        assert len(recent) == 1
+        assert recent[0]["activity_category"] == "crowd_forming"
+
+    def test_recent_activity_filters_category_and_score(self, store):
+        id1 = store.add_frame("jetson1", ts_days_ago(0), one_hot(0), kind="window")
+        id2 = store.add_frame("jetson1", ts_days_ago(0), one_hot(1), kind="window")
+        store.add_activity_scores(id1, self._result(top="crowd_forming", top_score=0.3))
+        store.add_activity_scores(id2, self._result(top="altercation", top_score=0.26))
+
+        assert len(store.recent_activity(category="crowd_forming")) == 1
+        assert len(store.recent_activity(min_score=0.28)) == 1
+        assert len(store.recent_activity()) == 2
+
+    def test_unmatched_excluded_unless_requested(self, store):
+        frame_id = store.add_frame("jetson1", ts_days_ago(0), one_hot(0), kind="window")
+        store.add_activity_scores(frame_id, self._result(matched=False))
+
+        assert store.recent_activity() == []
+        unmatched = store.recent_activity(include_unmatched=True)
+        assert len(unmatched) == 1
+        assert unmatched[0]["activity_category"] is None
+
+    def test_activity_categories_excludes_distractors(self, store):
+        frame_id = store.add_frame("jetson1", ts_days_ago(0), one_hot(0), kind="window")
+        store.add_activity_scores(frame_id, self._result())
+        cats = store.activity_categories()
+        assert "empty_scene" not in cats
+        assert "crowd_forming" in cats
+
+    def test_prune_cascades_to_activity_scores(self, store):
+        old_id = store.add_frame("jetson1", ts_days_ago(40), one_hot(0), kind="window")
+        store.add_activity_scores(old_id, self._result())
+        store.add_frame("jetson1", ts_days_ago(1), one_hot(1), kind="window")
+
+        store.prune(retention_days=30)
+        remaining = store._conn.execute(
+            "SELECT COUNT(*) AS c FROM activity_scores WHERE frame_id = ?", (old_id,)
+        ).fetchone()["c"]
+        assert remaining == 0
+
+
 class TestFrameSpool:
     def write_entry(self, spool_dir, ms: int, with_jpg: bool = True, corrupt: bool = False):
         spool_dir.mkdir(parents=True, exist_ok=True)
@@ -264,3 +411,24 @@ class TestFrameSpool:
         spool = FrameSpool(str(spool_dir))
         assert len(spool.pop_batch(2)) == 2
         assert spool.pending_count() == 4  # nothing deleted until remove()
+
+    def test_window_shaped_entry_passes_through_unchanged(self, tmp_path):
+        spool_dir = tmp_path / "spool"
+        spool_dir.mkdir(parents=True)
+        (spool_dir / "frame_5000.json").write_text(json.dumps({
+            "ts": ts_days_ago(0),
+            "trigger": "window",
+            "model": "test-clip",
+            "dim": DIM,
+            "embedding": one_hot(0),
+            "labels": ["person"],
+            "kind": "window",
+            "schema_version": 2,
+            "window": {"start": ts_days_ago(0.001), "end": ts_days_ago(0), "samples": 4},
+        }))
+
+        spool = FrameSpool(str(spool_dir))
+        entries = spool.pop_batch(10)
+        assert len(entries) == 1
+        assert entries[0].payload["kind"] == "window"
+        assert entries[0].payload["window"]["samples"] == 4

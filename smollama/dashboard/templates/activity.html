@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Activity{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <!-- Header -->
+    <div class="flex items-end justify-between flex-wrap gap-2">
+        <div>
+            <h1 class="text-3xl font-bold text-slate-900">Activity</h1>
+            <p class="mt-1 text-slate-500">Zero-shot triage: temporal windows scored against editable text categories — a review queue, not an alarm</p>
+        </div>
+    </div>
+
+    {% if not frames_enabled %}
+    <div class="text-center text-slate-400 py-12">
+        <p class="text-lg">Frame search is not enabled</p>
+        <p class="mt-1 text-sm">Set <code class="bg-slate-100 px-1 rounded">frames.enabled: true</code> in config.yaml — see docs/frame-search.md</p>
+    </div>
+    {% else %}
+
+    <!-- Filters -->
+    <div class="bg-white rounded-xl p-4 border border-slate-200 shadow-sm flex flex-wrap gap-3 items-end">
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Category</label>
+            <select id="category-filter"
+                    name="category"
+                    hx-get="/htmx/activity"
+                    hx-trigger="change"
+                    hx-target="#activity-results"
+                    hx-include="#hours-filter"
+                    hx-push-url="true"
+                    class="bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500">
+                <option value="" {% if not category %}selected{% endif %}>All categories</option>
+                {% for cat in categories %}
+                <option value="{{ cat }}" {% if cat == category %}selected{% endif %}>{{ cat }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label class="block text-xs font-medium text-slate-500 mb-1">Window</label>
+            <select id="hours-filter"
+                    name="hours"
+                    hx-get="/htmx/activity"
+                    hx-trigger="change"
+                    hx-target="#activity-results"
+                    hx-include="#category-filter"
+                    hx-push-url="true"
+                    class="bg-white border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500">
+                <option value="1" {% if hours == 1 %}selected{% endif %}>Last hour</option>
+                <option value="24" {% if hours == 24 %}selected{% endif %}>Last 24h</option>
+                <option value="168" {% if hours == 168 %}selected{% endif %}>Last 7 days</option>
+            </select>
+        </div>
+    </div>
+
+    <!-- Results -->
+    <div id="activity-results">
+        {% include "partials/activity_results.html" %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

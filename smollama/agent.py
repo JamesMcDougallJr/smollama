@@ -7,7 +7,7 @@ import time
 from typing import Any
 
 from .config import Config
-from .frames import ClipTextEncoder, FrameSpool, FrameStore
+from .frames import ActivityMatcher, ClipTextEncoder, FrameSpool, FrameStore
 from .gpio_reader import GPIOReader
 from .memory import LocalStore, MockEmbeddings, ObservationLoop, OllamaEmbeddings
 from .mqtt_client import MQTTClient, Message
@@ -21,7 +21,7 @@ from .plugins.loader import PluginLoader
 from .readings import GPIOReadingProvider, MQTTBridgeProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
-from .tools.frame_tools import SearchFramesTool
+from .tools.frame_tools import RecentActivityTool, SearchFramesTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
 from .mem0 import Mem0Client, Mem0Bridge, CrossNodeRecallTool
 from .sync import CRDTLog, SyncClient
@@ -104,6 +104,7 @@ class Agent:
         self._frames: FrameStore | None = None
         self._frame_spool: FrameSpool | None = None
         self._frames_retention_task: asyncio.Task | None = None
+        self._activity_matcher: ActivityMatcher | None = None
         if config.frames.enabled:
             if self._is_edge:
                 self._frame_spool = FrameSpool(
@@ -123,6 +124,12 @@ class Agent:
                     thumbnail_dir=config.frames.thumbnail_dir,
                     text_encoder=text_encoder,
                 )
+                if config.frames.activity_prompts and text_encoder is not None:
+                    self._activity_matcher = ActivityMatcher(
+                        prompts_path=config.frames.activity_prompts,
+                        text_encoder=text_encoder,
+                        default_threshold=config.frames.activity_default_threshold,
+                    )
 
         # Initialize Mem0, sync, and discovery (all skipped in edge mode)
         self._mem0_client: Mem0Client | None = None
@@ -187,6 +194,7 @@ class Agent:
             self._tools.register(GetRecentMessagesTool(self._mqtt))
             if self._frames:
                 self._tools.register(SearchFramesTool(self._frames))
+                self._tools.register(RecentActivityTool(self._frames))
             if self._mem0_client:
                 self._tools.register(CrossNodeRecallTool(self._mem0_client))
             for write_plugin in self._plugin_loader.get_write_plugins():
@@ -398,6 +406,30 @@ class Agent:
         if entries:
             logger.debug(f"Relayed {len(entries)} frames to MQTT")
 
+    def _maybe_score_activity(self, frame_id: int | None, data: dict) -> None:
+        """Score a just-ingested frame against the activity prompt matrix.
+
+        v0 only scores temporal windows unless activity_score_keyframes is set,
+        since keyframes are change-gated stills and windows carry the temporal
+        signal the categories are written against. Any matcher failure is
+        swallowed here — a scoring bug must never affect frame ingest itself.
+        """
+        if not frame_id or not self._activity_matcher:
+            return
+        frame = data.get("frame", data)
+        kind = frame.get("kind", "keyframe")
+        if kind != "window" and not self.config.frames.activity_score_keyframes:
+            return
+        try:
+            embedding = frame.get("embedding")
+            if not isinstance(embedding, list):
+                return
+            result = self._activity_matcher.score([float(x) for x in embedding])
+            if result:
+                self._frames.add_activity_scores(frame_id, result)
+        except Exception as e:
+            logger.warning(f"Activity scoring failed for frame {frame_id}: {e}")
+
     async def _handle_message(self, message: Message) -> None:
         """Handle an incoming MQTT message.
 
@@ -437,7 +469,8 @@ class Agent:
                     data = json.loads(message.payload)
                     parts = message.topic.split("/")
                     node = parts[-2] if len(parts) >= 3 else data.get("node", "unknown")
-                    self._frames.ingest_payload(node, data)
+                    frame_id = self._frames.ingest_payload(node, data)
+                    self._maybe_score_activity(frame_id, data)
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(f"Malformed frame payload on {message.topic}: {e}")
             return

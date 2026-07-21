@@ -9,8 +9,9 @@ the matching CLIP text encoder and runs KNN over the index.
 See docs/frame-search.md for the full architecture and setup.
 """
 
+from .activity_matcher import ActivityMatcher
 from .frame_store import FrameStore
 from .spool import FrameSpool
 from .text_encoder import ClipTextEncoder
 
-__all__ = ["FrameStore", "FrameSpool", "ClipTextEncoder"]
+__all__ = ["FrameStore", "FrameSpool", "ClipTextEncoder", "ActivityMatcher"]

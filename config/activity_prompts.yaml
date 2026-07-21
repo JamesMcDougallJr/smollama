@@ -1,0 +1,80 @@
+# Zero-shot activity categories for the frame-triage matcher (smollama/frames/activity_matcher.py).
+#
+# Each category is a set of natural-language prompt phrasings; they are
+# embedded with the CLIP text encoder and averaged (prompt ensembling) into
+# one vector. Adding or editing a category here is a text edit only, picked
+# up automatically on the next scored frame -- no retraining, no edge push.
+#
+# `distractor: true` categories don't show up as matches themselves; they
+# exist so real categories have to beat "nothing is happening" rather than
+# just being the least-bad option. A window is reported unmatched ("abstain")
+# whenever a distractor wins, or the winner scores below its threshold.
+#
+# Thresholds below are starting points, not tuned values -- raw CLIP cosine
+# similarities typically cluster in the ~0.2-0.3 range and vary by category.
+# Once activity_scores has real data, look at the score distribution per
+# category and adjust `threshold` (or the shared `default_threshold`) from
+# there. Treat a threshold change like a unit test: re-check it.
+
+default_threshold: 0.22
+
+categories:
+  - name: person_at_door
+    prompts:
+      - "a person standing at the front door of a house"
+      - "someone waiting at a doorstep"
+      - "a visitor ringing a doorbell"
+
+  - name: package_delivery
+    prompts:
+      - "a delivery person carrying a package"
+      - "a courier leaving a box on a porch"
+      - "someone in a uniform delivering a parcel"
+
+  - name: animal
+    prompts:
+      - "a dog or cat walking through the yard"
+      - "a wild animal in a residential yard at night"
+
+  - name: vehicle
+    prompts:
+      - "a car pulling into a driveway"
+      - "a truck parked in front of a house"
+
+  - name: crowd_forming
+    threshold: 0.24
+    prompts:
+      - "a group of several people gathered together outside"
+      - "a crowd of people standing in the street"
+
+  - name: altercation
+    threshold: 0.25
+    prompts:
+      - "two people fighting or shoving each other"
+      - "a physical struggle between people outdoors"
+      - "people arguing aggressively face to face"
+
+  - name: fire_smoke
+    threshold: 0.24
+    prompts:
+      - "flames or fire visible outside a building"
+      - "thick smoke rising near a house"
+
+  # ---- distractors: absorb background so real categories must beat them ----
+  - name: empty_scene
+    distractor: true
+    prompts:
+      - "an empty street with no people"
+      - "a quiet residential yard with nothing happening"
+
+  - name: weather
+    distractor: true
+    prompts:
+      - "rain falling at night on an empty street"
+      - "wind blowing trees, shadows moving"
+
+  - name: headlights
+    distractor: true
+    prompts:
+      - "car headlights glare washing out a dark camera image"
+      - "a blurry overexposed night camera frame"

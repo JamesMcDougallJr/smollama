@@ -8,16 +8,26 @@ MQTT, and deletes them only after a successful publish — so frames survive
 master/broker outages. The spool is capped: oldest entries are dropped first
 when the cap is exceeded, bounding SD-card use during long partitions.
 
-The JSON entry contract (produced by scripts/jetson/clip_frames.py):
+The JSON entry contract (produced by scripts/jetson/clip_frames.py), v2:
 
     {
-      "ts": "2026-07-18T12:00:00-07:00",   # tz-aware ISO timestamp
-      "trigger": "change" | "heartbeat",
+      "schema_version": 2,                  # absent => v1, treated as a keyframe
+      "kind": "keyframe" | "window",         # absent => "keyframe"
+      "ts": "2026-07-18T12:00:00-07:00",    # tz-aware ISO; window => window end
+      "trigger": "change" | "heartbeat" | "window",
       "model": "mobileclip_s0",
       "dim": 512,
-      "embedding": [0.01, ...],             # L2-normalized floats
-      "labels": ["person", "dog"]           # detectNet classes in frame
+      "embedding": [0.01, ...],              # L2-normalized floats
+      "labels": ["person", "dog"],           # detectNet classes in frame/window
+      "window": {                            # window-only
+        "start": "<ISO>", "end": "<ISO>",
+        "samples": 4, "person_max": 2, "person_mean": 1.5, "actionness": 1.5
+      }
     }
+
+pop_batch() only validates ``embedding`` + ``ts``; every other key (including
+``kind``/``window``) passes through untouched, so v1 and v2 entries share the
+same spool/relay path with no code changes here.
 """
 
 import base64

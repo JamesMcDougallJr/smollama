@@ -113,6 +113,12 @@ frames:
   retention_days: 30
   archive_dir: ""         # e.g. "~/frame-archive" — staged before pruning
   archive_command: ""     # e.g. "rclone move ~/frame-archive remote:frames"
+  # Zero-shot activity matcher (master-only): scores window embeddings against
+  # a prompt file of text categories. Edit the categories, not the code — see
+  # config/activity_prompts.yaml and smollama/frames/activity_matcher.py.
+  activity_prompts: ""     # e.g. "config/activity_prompts.yaml" — "" = matcher off
+  activity_default_threshold: 0.22
+  activity_score_keyframes: false  # v0: score only temporal windows, not every keyframe
   # Edge-only settings (camera node relaying the writer's spool):
   spool_dir: "~/.smollama/frames_spool"
   publish_batch: 5

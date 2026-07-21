@@ -40,6 +40,128 @@ from datetime import datetime, timezone
 logger = logging.getLogger("clip_frames")
 
 
+class WindowAggregator(object):
+    """Overlapping mean-pooled embedding windows over sampled frames.
+
+    Pure numpy, no onnxruntime/PIL dependency, so it's importable and
+    testable without the ONNX runtime installed. FrameEmbedder feeds it
+    samples (reusing a keyframe's embedding when one was just computed, or
+    embedding at a fixed low rate otherwise) and drains completed windows
+    once per elapsed step boundary.
+    """
+
+    def __init__(
+        self,
+        np_module,
+        window_seconds=4.0,
+        step_seconds=2.0,
+        sample_interval=1.0,
+        min_samples=2,
+        idle_grace_seconds=2.0,
+    ):
+        self._np = np_module
+        self.window_seconds = window_seconds
+        self.step_seconds = step_seconds
+        self.sample_interval = sample_interval
+        self.min_samples = min_samples
+        self.idle_grace_seconds = idle_grace_seconds
+
+        self._samples = []  # dicts: ts, ts_iso, embedding, person_count, labels, jpeg
+        self._last_sample_time = None
+        self._last_active_time = None
+        self._next_step_time = None
+
+        self.windows_emitted = 0
+        self.windows_skipped_short = 0
+        self.samples_taken = 0
+        self.samples_gated = 0
+
+    def is_active(self, now, person_count):
+        """True if currently active (person present) or within the idle grace period."""
+        if person_count and person_count > 0:
+            self._last_active_time = now
+            return True
+        return (
+            self._last_active_time is not None
+            and (now - self._last_active_time) <= self.idle_grace_seconds
+        )
+
+    def should_sample(self, now, person_count):
+        """True if active and enough time has passed since the last sample."""
+        if not self.is_active(now, person_count):
+            return False
+        if self._last_sample_time is not None and (now - self._last_sample_time) < self.sample_interval:
+            self.samples_gated += 1
+            return False
+        return True
+
+    def add_sample(self, now, ts_iso, embedding, person_count, labels, jpeg_bytes=None):
+        vec = self._np.asarray(embedding, dtype=self._np.float32)
+        self._samples.append({
+            "ts": now,
+            "ts_iso": ts_iso,
+            "embedding": vec,
+            "person_count": person_count or 0,
+            "labels": list(labels or []),
+            "jpeg": jpeg_bytes,
+        })
+        self._last_sample_time = now
+        self.samples_taken += 1
+        if self._next_step_time is None:
+            self._next_step_time = now + self.step_seconds
+
+    def pop_ready(self, now):
+        """Emit every window whose step boundary has elapsed, oldest first."""
+        windows = []
+        if self._next_step_time is None:
+            return windows
+
+        while self._next_step_time <= now:
+            end = self._next_step_time
+            start = end - self.window_seconds
+            in_window = [s for s in self._samples if start <= s["ts"] <= end]
+            if len(in_window) >= self.min_samples:
+                windows.append(self._build_window(start, end, in_window))
+                self.windows_emitted += 1
+            else:
+                self.windows_skipped_short += 1
+            self._next_step_time += self.step_seconds
+
+        cutoff = now - self.window_seconds - self.step_seconds
+        self._samples = [s for s in self._samples if s["ts"] >= cutoff]
+        return windows
+
+    def _build_window(self, start, end, samples):
+        np = self._np
+        vecs = np.stack([s["embedding"] for s in samples], axis=0)
+        mean = vecs.mean(axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm > 0:
+            mean = mean / norm
+
+        labels = sorted(set(label for s in samples for label in s["labels"]))
+        person_counts = [s["person_count"] for s in samples]
+        mid_ts = (start + end) / 2.0
+        mid_sample = min(samples, key=lambda s: abs(s["ts"] - mid_ts))
+
+        return {
+            "embedding": [float(x) for x in mean],
+            "start_ts": start,
+            "end_ts": end,
+            "start_iso": _iso(start),
+            "end_iso": _iso(end),
+            "samples": len(samples),
+            "person_max": max(person_counts),
+            "person_mean": sum(person_counts) / float(len(person_counts)),
+            "labels": labels,
+            "jpeg": mid_sample["jpeg"],
+        }
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().isoformat()
+
+
 class FrameEmbedder(object):
     """Change-gated CLIP embedding + spool writer for camera frames."""
 
@@ -52,6 +174,12 @@ class FrameEmbedder(object):
         thumb_width=640,
         jpeg_quality=80,
         providers=None,
+        windows_enabled=False,
+        window_seconds=4.0,
+        window_step_seconds=2.0,
+        window_sample_interval=1.0,
+        window_min_samples=2,
+        window_idle_grace_seconds=2.0,
     ):
         import numpy as np
         import onnxruntime as ort
@@ -62,6 +190,17 @@ class FrameEmbedder(object):
         self.max_spool = max_spool
         self.thumb_width = thumb_width
         self.jpeg_quality = jpeg_quality
+
+        self._windows = None
+        if windows_enabled:
+            self._windows = WindowAggregator(
+                np,
+                window_seconds=window_seconds,
+                step_seconds=window_step_seconds,
+                sample_interval=window_sample_interval,
+                min_samples=window_min_samples,
+                idle_grace_seconds=window_idle_grace_seconds,
+            )
 
         with open(os.path.join(model_dir, "meta.json")) as f:
             self.meta = json.load(f)
@@ -110,27 +249,69 @@ class FrameEmbedder(object):
     def maybe_capture(self, rgb_image, state):
         """Embed + spool the frame if the scene changed or the heartbeat is due.
 
+        Also feeds the (optional) temporal window aggregator: reuses this
+        call's keyframe embedding as a window sample when one was computed,
+        otherwise embeds separately at the aggregator's own sample interval
+        while the scene is active. Window/keyframe failures are independent —
+        one never blocks the other.
+
         Args:
             rgb_image: HWC uint8 numpy array (RGB, no alpha).
             state: JSON-comparable dict of detectNet scene state; any change
-                   vs the previous call triggers a capture.
+                   vs the previous call triggers a keyframe capture.
 
         Returns:
-            The trigger ('change'/'heartbeat') if captured, else None.
+            The trigger ('change'/'heartbeat') if a keyframe was captured, else None.
         """
         trigger = self._should_capture(state)
         self._last_state = state
-        if trigger is None:
-            return None
+        now = time.time()
 
-        try:
-            embedding = self.embed(rgb_image)
-            self._write_spool_entry(rgb_image, embedding, state, trigger)
-            self._last_capture = time.time()
-            return trigger
-        except Exception as e:
-            logger.error("Frame capture failed: %s", e)
-            return None
+        embedding = None
+        if trigger is not None:
+            try:
+                embedding = self.embed(rgb_image)
+                self._write_spool_entry(rgb_image, embedding, state, trigger)
+                self._last_capture = now
+            except Exception as e:
+                logger.error("Frame capture failed: %s", e)
+                trigger = None
+
+        if self._windows is not None:
+            try:
+                self._maybe_window_sample(rgb_image, state, now, embedding)
+            except Exception as e:
+                logger.error("Window aggregation failed: %s", e)
+            if trigger == "heartbeat":
+                logger.info(
+                    "Window stats: emitted=%d skipped_short=%d samples=%d gated=%d",
+                    self._windows.windows_emitted,
+                    self._windows.windows_skipped_short,
+                    self._windows.samples_taken,
+                    self._windows.samples_gated,
+                )
+
+        return trigger
+
+    def _maybe_window_sample(self, rgb_image, state, now, existing_embedding):
+        person_count = state.get("person_count", 0) if isinstance(state, dict) else 0
+        labels = state.get("labels", []) if isinstance(state, dict) else []
+
+        sample_embedding = existing_embedding
+        take_sample = False
+        if sample_embedding is not None:
+            take_sample = self._windows.is_active(now, person_count)
+        elif self._windows.should_sample(now, person_count):
+            take_sample = True
+            sample_embedding = self.embed(rgb_image)
+
+        if take_sample:
+            jpeg_bytes = self._encode_thumb_bytes(rgb_image)
+            ts_iso = datetime.now(timezone.utc).astimezone().isoformat()
+            self._windows.add_sample(now, ts_iso, sample_embedding, person_count, labels, jpeg_bytes)
+
+        for window in self._windows.pop_ready(now):
+            self._write_window_entry(window)
 
     def embed(self, rgb_image):
         """Run the CLIP image encoder; returns an L2-normalized float list."""
@@ -163,14 +344,11 @@ class FrameEmbedder(object):
 
     # ==================== Spool ====================
 
-    def _write_spool_entry(self, rgb_image, embedding, state, trigger):
-        """Write the {jpg, json} pair; .jpg first so .json marks completeness."""
+    def _encode_thumb_bytes(self, rgb_image):
+        """Downscale + JPEG-encode a frame to bytes (shared by keyframes and window samples)."""
+        import io
+
         from PIL import Image
-
-        self._enforce_cap()
-
-        ts_ms = int(time.time() * 1000)
-        base = os.path.join(self.spool_dir, "frame_%d" % ts_ms)
 
         img = Image.fromarray(rgb_image)
         if img.size[0] > self.thumb_width:
@@ -178,15 +356,63 @@ class FrameEmbedder(object):
             img = img.resize(
                 (self.thumb_width, int(img.size[1] * ratio)), Image.BICUBIC
             )
-        img.save(base + ".jpg", "JPEG", quality=self.jpeg_quality)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=self.jpeg_quality)
+        return buf.getvalue()
+
+    def _write_spool_entry(self, rgb_image, embedding, state, trigger):
+        """Write the {jpg, json} pair; .jpg first so .json marks completeness."""
+        self._enforce_cap()
+
+        ts_ms = int(time.time() * 1000)
+        base = os.path.join(self.spool_dir, "frame_%d" % ts_ms)
+
+        with open(base + ".jpg", "wb") as f:
+            f.write(self._encode_thumb_bytes(rgb_image))
 
         entry = {
+            "schema_version": 2,
+            "kind": "keyframe",
             "ts": datetime.now(timezone.utc).astimezone().isoformat(),
             "trigger": trigger,
             "model": self.meta.get("model"),
             "dim": len(embedding),
             "embedding": embedding,
             "labels": state.get("labels", []),
+        }
+        tmp = base + ".json.tmp"
+        with open(tmp, "w") as f:
+            json.dump(entry, f)
+        os.rename(tmp, base + ".json")
+
+    def _write_window_entry(self, window):
+        """Write a temporal window's {jpg, json} pair (same jpg-first discipline)."""
+        self._enforce_cap()
+
+        ts_ms = int(window["end_ts"] * 1000)
+        base = os.path.join(self.spool_dir, "frame_%d" % ts_ms)
+
+        if window.get("jpeg"):
+            with open(base + ".jpg", "wb") as f:
+                f.write(window["jpeg"])
+
+        entry = {
+            "schema_version": 2,
+            "kind": "window",
+            "ts": window["end_iso"],
+            "trigger": "window",
+            "model": self.meta.get("model"),
+            "dim": len(window["embedding"]),
+            "embedding": window["embedding"],
+            "labels": window["labels"],
+            "window": {
+                "start": window["start_iso"],
+                "end": window["end_iso"],
+                "samples": window["samples"],
+                "person_max": window["person_max"],
+                "person_mean": window["person_mean"],
+                "actionness": window["person_mean"],
+            },
         }
         tmp = base + ".json.tmp"
         with open(tmp, "w") as f:

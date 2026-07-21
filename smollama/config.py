@@ -104,6 +104,10 @@ class FramesConfig:
     retention_days: int = 30
     archive_dir: str = ""         # "" = prune without archiving
     archive_command: str = ""     # optional shell command run after staging (e.g. rclone)
+    # Master: zero-shot activity matcher (see smollama/frames/activity_matcher.py)
+    activity_prompts: str = ""              # path to prompts yaml; "" = matcher off
+    activity_default_threshold: float = 0.22
+    activity_score_keyframes: bool = False  # v0: score windows only, not every keyframe
     # Edge: spool relay
     spool_dir: str = "~/.smollama/frames_spool"
     publish_batch: int = 5        # max frames relayed per edge publish cycle
@@ -494,6 +498,13 @@ def load_config(config_path: str | Path | None = None) -> Config:
                     retention_days=frames_data.get("retention_days", defaults.retention_days),
                     archive_dir=frames_data.get("archive_dir", defaults.archive_dir),
                     archive_command=frames_data.get("archive_command", defaults.archive_command),
+                    activity_prompts=frames_data.get("activity_prompts", defaults.activity_prompts),
+                    activity_default_threshold=frames_data.get(
+                        "activity_default_threshold", defaults.activity_default_threshold
+                    ),
+                    activity_score_keyframes=frames_data.get(
+                        "activity_score_keyframes", defaults.activity_score_keyframes
+                    ),
                     spool_dir=frames_data.get("spool_dir", defaults.spool_dir),
                     publish_batch=frames_data.get("publish_batch", defaults.publish_batch),
                     spool_max_entries=frames_data.get("spool_max_entries", defaults.spool_max_entries),

@@ -19,12 +19,15 @@ master answers queries with the matching CLIP **text** encoder + sqlite-vec KNN.
 Jetson Nano (Py3.6 writer, jetson_infer.py)
   camera → detectNet/poseNet (existing)
          → change-gate + heartbeat → CLIP image encoder   [clip_frames.py]
-         → spool: frame_<ms>.json (embedding+labels) + frame_<ms>.jpg
+         → (optional) overlapping temporal windows, mean-pooled embedding
+         → spool: frame_<ms>.json (embedding+labels[+window]) + frame_<ms>.jpg
 Jetson smollama agent (Py3.10, edge mode)
   drains spool → MQTT  smollama/<node>/frames  (embedding + base64 JPEG)
 Master (llama-master)
   → FrameStore: frames.db (sqlite-vec, cosine) + thumbnails on disk
   → dashboard /frames page · search_frames LLM tool
+  → (optional) ActivityMatcher: prompt-file categories vs. window embeddings
+    → dashboard /activity page · recent_activity LLM tool
   → daily retention: archive (optional) then prune
 ```
 
@@ -120,6 +123,48 @@ rejected with an error, not silently mixed).
   timestamps, node, detectNet labels, and similarity scores.
 - **Agent tool:** the LLM can call `search_frames` ("when did you last see a
   cat?") alongside `search_observations`.
+
+## Zero-shot activity triage (optional, on top of frame search)
+
+Categories are natural-language prompts, not a trained model — see
+`config/activity_prompts.yaml`. Editing that file is the only step; the master
+re-embeds and hot-reloads it on the next scored frame, no restart, and no
+change ever needs to reach the edge fleet.
+
+**Wire contract v2:** `clip_frames.py` can additionally emit overlapping
+temporal windows (mean-pooled, renormalized embedding over ~4s of sampled
+frames) alongside its existing change-gated keyframes. Both shapes flow
+through the same spool/MQTT topic; a `kind` field (`"keyframe"` or `"window"`)
+and `schema_version: 2` distinguish them. A payload with no `kind` is treated
+as a keyframe (v1 compatibility), and a v2 edge talking to an unupgraded
+master ingests windows as keyframes — degraded (no scoring) but harmless.
+Window payloads add one field:
+
+```json
+"window": {
+  "start": "<ISO>", "end": "<ISO>",
+  "samples": 4, "person_max": 2, "person_mean": 1.5, "actionness": 1.5
+}
+```
+
+Enable windows by passing `windows_enabled=True` (plus `window_seconds`,
+`window_step_seconds`, etc.) to `FrameEmbedder` in `jetson_infer.py`, and set
+`frames.activity_prompts` on the master. The master scores each incoming
+window against the prompt file (`smollama/frames/activity_matcher.py`):
+cosine similarity against every category **and** every `distractor: true`
+background category, argmax decides, and a real category only "wins" if it
+beats the best background explanation and clears its threshold — otherwise
+the window is stored unmatched ("abstain"). Full per-category scores persist
+in `activity_scores` for later threshold tuning; the dashboard/tool only
+surface the top match.
+
+- **Dashboard:** http://master:8080/activity — ranked review queue of matched
+  windows with evidence (person count, detectNet labels, thumbnail).
+- **Agent tool:** `recent_activity` ("has anything been flagged recently?").
+
+This is a triage/review surface, not an autonomous alert: everything it
+produces is a scored candidate for a human to look at, never an automated
+action.
 
 ## Retention
 
