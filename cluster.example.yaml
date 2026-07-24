@@ -1,0 +1,138 @@
+# Smollama cluster configuration — copy to cluster.yaml and edit for your setup.
+#
+# cluster.yaml is gitignored (like config.yaml). This file is the committed template.
+#
+# Each node's effective config = deep_merge(base, nodes.<hostname>).
+# Node is selected by socket.gethostname(); override with SMOLLAMA_NODE_NAME env var.
+#
+# _deploy and writer are deploy-only metadata — stripped before writing the
+# node's ~/.smollama/config.yaml. See: smollama deploy --help
+
+# ── Shared defaults (applied to every node) ─────────────────────────────────
+base:
+  mqtt:
+    broker: 10.0.0.1          # central MQTT broker IP or hostname
+    port: 1883
+
+  memory:
+    embedding_model: all-minilm:l6-v2
+
+  agent:
+    system_prompt: >
+      You are a home automation assistant coordinating sensors and cameras
+      across a local network of Raspberry Pi and edge devices.
+
+# ── Per-node config ──────────────────────────────────────────────────────────
+nodes:
+
+  # ── Master node (Raspberry Pi) ─────────────────────────────────────────────
+  raspberrypi:
+    _deploy:
+      host: raspberrypi.local  # SSH target; can be IP or mDNS hostname
+      user: james
+
+    node:
+      name: smollama-master
+
+    agent:
+      mode: full               # full = LLM + observations + dashboard
+
+    ollama:
+      model: gemma4:e2b        # must match `ollama list` on this node
+      host: localhost
+
+    frames:
+      enabled: true
+      clip_text_model: ~/clip-export/text_encoder.onnx
+      clip_tokenizer: ~/clip-export/bpe_simple_vocab_16e6.txt.gz
+      activity_prompts: ~/smollama/config/activity_prompts.yaml
+      retention_days: 30
+
+    memory:
+      observation_enabled: true
+      observation_interval_minutes: 15
+
+
+  # ── Edge camera node (Jetson Nano) ─────────────────────────────────────────
+  james-desktop:
+    _deploy:
+      host: james-desktop      # mDNS hostname or IP
+      user: james
+      writer: true             # write ~/.smollama/writer_config.json for jetson_infer.py
+
+    node:
+      name: james-desktop
+
+    agent:
+      mode: edge               # edge = sensor/frame relay only, no LLM
+      edge_publish_interval_seconds: 10
+
+    frames:
+      enabled: true
+      spool_dir: ~/.smollama/frames_spool
+      publish_batch: 5
+
+    plugins:
+      builtin:
+        jetson_inference:
+          enabled: true
+          config:
+            file_path: ~/.smollama/jetson_inference.json
+            max_age_seconds: 30
+
+    # writer: controls jetson_infer.py — written to ~/.smollama/writer_config.json
+    writer:
+      model_dir: ~/clip-export
+      spool_dir: ~/.smollama/frames_spool
+      activity_only: true      # skip heartbeat keyframes; only spool activity windows
+      windows_enabled: true    # emit overlapping 4s temporal windows
+      window_seconds: 4.0
+      window_step_seconds: 2.0
+      window_sample_interval: 1.0
+      heartbeat_seconds: 300   # ignored when activity_only=true
+
+
+  # ── Standalone node (Jetson Orin Nano or any single-machine deployment) ────
+  #
+  # One device runs everything: writer + smollama full mode + dashboard.
+  # Frames flow through localhost MQTT — no network hop.
+  # Point ollama.host at a remote machine to offload the LLM, or set
+  # memory.observation_enabled: false to skip LLM observations entirely.
+  #
+  # orin-nano:
+  #   _deploy:
+  #     host: orin-nano.local
+  #     user: james
+  #     writer: true
+  #
+  #   node:
+  #     name: orin-nano
+  #
+  #   agent:
+  #     mode: full
+  #
+  #   mqtt:
+  #     broker: localhost       # broker runs on-device
+  #
+  #   ollama:
+  #     host: remote-machine    # or localhost if Orin Nano has enough VRAM
+  #     model: gemma4:e2b
+  #
+  #   frames:
+  #     enabled: true
+  #     clip_text_model: ~/clip-export/text_encoder.onnx
+  #     clip_tokenizer: ~/clip-export/bpe_simple_vocab_16e6.txt.gz
+  #     activity_prompts: ~/smollama/config/activity_prompts.yaml
+  #     spool_dir: ~/.smollama/frames_spool
+  #
+  #   plugins:
+  #     builtin:
+  #       jetson_inference:
+  #         enabled: true
+  #
+  #   memory:
+  #     observation_enabled: false  # set true if LLM is available
+  #
+  #   writer:
+  #     activity_only: true
+  #     windows_enabled: true

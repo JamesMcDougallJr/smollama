@@ -665,6 +665,57 @@ async def cmd_discovery_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_deploy(args: argparse.Namespace) -> int:
+    """Deploy smollama to one or all cluster nodes."""
+    from .deploy import deploy_node, list_nodes, load_cluster_data, setup_node
+
+    cluster_path = Path(getattr(args, "cluster", "cluster.yaml"))
+    if not cluster_path.exists():
+        print(f"Cluster config not found: {cluster_path}")
+        print("Copy cluster.example.yaml → cluster.yaml and edit it for your setup.")
+        return 1
+
+    cluster_data = load_cluster_data(cluster_path)
+    repo_root = Path(__file__).parent.parent.resolve()
+
+    deploy_all = getattr(args, "all", False)
+    node_key = getattr(args, "node", None)
+    dry_run = getattr(args, "dry_run", False)
+    restart = getattr(args, "restart", False)
+    bootstrap = getattr(args, "bootstrap", False)
+    do_setup = getattr(args, "setup", False)
+
+    if not node_key and not deploy_all:
+        # List mode
+        nodes = list_nodes(cluster_data)
+        if not nodes:
+            print("No nodes defined in cluster config.")
+            return 0
+        print(f"Nodes in {cluster_path}:")
+        for n in nodes:
+            writer = " [writer]" if n["writer"] else ""
+            print(f"  {n['key']:<20} {n['host']:<25} mode={n['mode']}{writer}")
+        print(f"\nUsage: smollama deploy <node>  or  smollama deploy --all")
+        return 0
+
+    targets = list((cluster_data.get("nodes") or {}).keys()) if deploy_all else [node_key]
+    failed = []
+    for key in targets:
+        if do_setup:
+            rc = setup_node(key, cluster_data, dry_run=dry_run)
+            if rc != 0:
+                failed.append(key)
+                continue
+        rc = deploy_node(key, cluster_data, repo_root, dry_run=dry_run, restart=restart, bootstrap=bootstrap)
+        if rc != 0:
+            failed.append(key)
+
+    if failed:
+        print(f"\nFailed nodes: {', '.join(failed)}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_plugin_install(args: argparse.Namespace) -> int:
     """Install a plugin from a remote source."""
     import shutil
@@ -973,6 +1024,49 @@ def main() -> int:
     # discovery list
     discovery_list = discovery_subparsers.add_parser("list", help="List discovered nodes")
     discovery_list.set_defaults(func=cmd_discovery_list, is_async=True)
+
+    # Deploy command
+    deploy_parser = subparsers.add_parser(
+        "deploy",
+        help="Deploy smollama to cluster nodes defined in cluster.yaml",
+    )
+    deploy_parser.add_argument(
+        "node",
+        nargs="?",
+        help="Node key to deploy (omit to list nodes)",
+    )
+    deploy_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Deploy to all nodes in cluster.yaml",
+    )
+    deploy_parser.add_argument(
+        "--cluster",
+        default="cluster.yaml",
+        help="Path to cluster config (default: cluster.yaml)",
+    )
+    deploy_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="Print commands without executing",
+    )
+    deploy_parser.add_argument(
+        "--restart",
+        action="store_true",
+        help="Restart smollama service on remote nodes after deploy",
+    )
+    deploy_parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="Copy SSH key to remote node before deploying (first-time setup, prompts for remote password)",
+    )
+    deploy_parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Install onnxruntime-gpu on writer nodes before deploying (Jetson Nano first-time setup)",
+    )
+    deploy_parser.set_defaults(func=cmd_deploy)
 
     # Plugin commands
     plugin_parser = subparsers.add_parser("plugin", help="Manage plugins")

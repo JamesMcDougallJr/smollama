@@ -101,6 +101,54 @@ def main() -> int:
     with torch.no_grad():
         dim = int(ImageEncoder(model)(image_input).shape[-1])
 
+    # torch >= 2.0 traces aten::scaled_dot_product_attention which has no
+    # opset-13 ONNX symbolic (not even on CPU — the torch.backends.cuda flags
+    # only control CUDA kernel selection, not graph tracing).  Monkey-patch
+    # F.scaled_dot_product_attention with explicit matmul+softmax before
+    # export so those decomposed ops appear in the ONNX graph instead.
+    import torch.nn.functional as _F
+    _orig_sdpa = getattr(_F, "scaled_dot_product_attention", None)
+    if _orig_sdpa is not None:
+        def _sdpa_compat(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, **kw):
+            scale = query.size(-1) ** -0.5
+            attn = (query * scale) @ key.transpose(-2, -1)
+            if is_causal:
+                q_len, k_len = query.size(-2), key.size(-2)
+                mask = torch.ones(q_len, k_len, dtype=torch.bool, device=query.device).tril()
+                attn = attn.masked_fill(~mask, float("-inf"))
+            if attn_mask is not None:
+                attn = attn + attn_mask
+            attn = attn.softmax(dim=-1)
+            if dropout_p > 0.0:
+                attn = _F.dropout(attn, p=dropout_p)
+            return attn @ value
+        _F.scaled_dot_product_attention = _sdpa_compat
+
+    # Register ONNX symbolic for aten::unflatten (torch < 2.1 lacks this for
+    # opsets 13-17).  Decompose to Reshape — valid in all opsets and TRT-safe.
+    try:
+        from torch.onnx.symbolic_helper import parse_args as _pa
+
+        @_pa("v", "i", "is")
+        def _unflatten_sym(g, input, dim, sizes):
+            shape = input.type().sizes() if hasattr(input.type(), "sizes") else None
+            if shape is None:
+                raise RuntimeError("unflatten ONNX export requires static shape")
+            if dim < 0:
+                dim = len(shape) + dim
+            new_shape = list(shape[:dim]) + list(sizes) + list(shape[dim + 1:])
+            return g.op(
+                "Reshape", input,
+                g.op("Constant", value_t=torch.tensor(new_shape, dtype=torch.int64)),
+            )
+
+        for _opset in range(13, 18):
+            torch.onnx.register_custom_op_symbolic(
+                "aten::unflatten", _unflatten_sym, opset_version=_opset
+            )
+    except Exception as _e:
+        print(f"[export_clip] Warning: unflatten symbolic not registered: {_e}")
+
     print(f"Exporting image encoder ({image_size}px → {dim}-d, opset {args.opset})...")
     torch.onnx.export(
         ImageEncoder(model),
@@ -112,16 +160,27 @@ def main() -> int:
         dynamic_axes={"image": {0: "batch"}, "embedding": {0: "batch"}},
     )
 
-    print("Exporting text encoder...")
-    torch.onnx.export(
-        TextEncoder(model),
-        text_input,
-        str(out_dir / "text_encoder.onnx"),
-        input_names=["tokens"],
-        output_names=["embedding"],
-        opset_version=args.opset,
-        dynamic_axes={"tokens": {0: "batch"}, "embedding": {0: "batch"}},
-    )
+    # Text encoder stays on the master (Pi) — no TRT constraint — so use at
+    # least opset 14 where aten::unflatten has a symbolic (needed for MobileCLIP).
+    # MobileCLIP's transformer uses dynamic shapes in MultiheadAttention that
+    # are tricky to export; catch the failure and fall back to open_clip at runtime.
+    text_opset = max(args.opset, 14)
+    print(f"Exporting text encoder (opset {text_opset})...")
+    try:
+        torch.onnx.export(
+            TextEncoder(model),
+            text_input,
+            str(out_dir / "text_encoder.onnx"),
+            input_names=["tokens"],
+            output_names=["embedding"],
+            opset_version=text_opset,
+            dynamic_axes={"tokens": {0: "batch"}, "embedding": {0: "batch"}},
+        )
+        print("  text encoder exported.")
+    except Exception as _te:
+        print(f"  WARNING: text encoder ONNX export failed ({_te.__class__.__name__}: {_te})")
+        print("  The master will use open_clip directly for text encoding (no ONNX needed).")
+        (out_dir / "text_encoder.onnx").unlink(missing_ok=True)
 
     # The master's vendored tokenizer needs CLIP's BPE vocab; open_clip bundles it
     vocab_src = Path(open_clip.__file__).parent / "bpe_simple_vocab_16e6.txt.gz"

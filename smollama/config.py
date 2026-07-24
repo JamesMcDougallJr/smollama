@@ -305,6 +305,58 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _discover_cluster_config_path() -> Path | None:
+    """Search standard locations for a cluster config file."""
+    candidates = [
+        Path("cluster.yaml"),
+        Path("cluster.yml"),
+        Path.home() / ".smollama" / "cluster.yaml",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_cluster_config(
+    cluster_path: str | Path,
+    node_key: str | None = None,
+) -> dict:
+    """Extract and merge this node's config section from a cluster.yaml.
+
+    Node is identified by ``node_key`` (default: ``SMOLLAMA_NODE_NAME`` env var,
+    then ``socket.gethostname()``). The result is ``deep_merge(base, nodes[key])``
+    with ``_deploy`` and ``writer`` keys stripped — those are deploy-only metadata.
+
+    Raises ``ValueError`` if the node key is not found in the cluster config.
+    """
+    import socket
+
+    path = Path(cluster_path).expanduser()
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+
+    base = data.get("base") or {}
+    nodes = data.get("nodes") or {}
+
+    if node_key is None:
+        node_key = os.environ.get("SMOLLAMA_NODE_NAME") or socket.gethostname()
+
+    if node_key not in nodes:
+        raise ValueError(
+            f"Node {node_key!r} not found in cluster config {path}. "
+            f"Available nodes: {list(nodes.keys())}. "
+            f"Set SMOLLAMA_NODE_NAME to match a cluster node key."
+        )
+
+    node_data = {
+        k: v
+        for k, v in (nodes[node_key] or {}).items()
+        if k not in ("_deploy", "writer")
+    }
+    return _deep_merge(base, node_data)
+
+
 def _discover_config_path() -> Path | None:
     """Search standard locations for a config file.
 
@@ -343,19 +395,31 @@ def load_config(config_path: str | Path | None = None) -> Config:
     logger = logging.getLogger(__name__)
 
     config = Config()
+    _cluster_data: dict | None = None
 
     if config_path is None:
-        discovered = _discover_config_path()
-        if discovered:
-            logger.info(f"Using config file: {discovered}")
-            config_path = discovered
+        cluster_path = _discover_cluster_config_path()
+        if cluster_path:
+            logger.info(f"Using cluster config: {cluster_path}")
+            try:
+                _cluster_data = load_cluster_config(cluster_path)
+            except ValueError as e:
+                logger.warning(f"Cluster config node not found, falling back to config.yaml: {e}")
 
-    if config_path:
+        if _cluster_data is None:
+            discovered = _discover_config_path()
+            if discovered:
+                logger.info(f"Using config file: {discovered}")
+                config_path = discovered
+
+    data: dict = {}
+    if _cluster_data is not None:
+        data = _cluster_data
+    elif config_path:
         path = Path(config_path)
         if path.exists():
             with open(path) as f:
                 data = yaml.safe_load(f) or {}
-
             local_path = path.parent / (path.stem.split(".")[0] + ".local.yaml")
             if local_path.exists():
                 with open(local_path) as lf:
@@ -363,254 +427,255 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 logger.info(f"Applying local config overrides from: {local_path}")
                 data = _deep_merge(data, local_data)
 
-            # Parse node config
-            if "node" in data:
-                config.node = NodeConfig(
-                    name=data["node"].get("name", config.node.name)
-                )
+    if data:
+        # Parse node config
+        if "node" in data:
+            config.node = NodeConfig(
+                name=data["node"].get("name", config.node.name)
+            )
 
-            # Parse ollama config
-            if "ollama" in data:
-                ollama_data = data["ollama"]
-                config.ollama = OllamaConfig(
-                    host=ollama_data.get("host", config.ollama.host),
-                    port=ollama_data.get("port", config.ollama.port),
-                    model=ollama_data.get("model", config.ollama.model),
-                    keep_alive=ollama_data.get("keep_alive", config.ollama.keep_alive),
-                )
+        # Parse ollama config
+        if "ollama" in data:
+            ollama_data = data["ollama"]
+            config.ollama = OllamaConfig(
+                host=ollama_data.get("host", config.ollama.host),
+                port=ollama_data.get("port", config.ollama.port),
+                model=ollama_data.get("model", config.ollama.model),
+                keep_alive=ollama_data.get("keep_alive", config.ollama.keep_alive),
+            )
 
-            # Parse MQTT config
-            if "mqtt" in data:
-                mqtt_data = data["mqtt"]
-                topics = MQTTTopicsConfig()
-                if "topics" in mqtt_data:
-                    topics = _parse_mqtt_topics(mqtt_data["topics"])
+        # Parse MQTT config
+        if "mqtt" in data:
+            mqtt_data = data["mqtt"]
+            topics = MQTTTopicsConfig()
+            if "topics" in mqtt_data:
+                topics = _parse_mqtt_topics(mqtt_data["topics"])
 
-                config.mqtt = MQTTConfig(
-                    broker=mqtt_data.get("broker", config.mqtt.broker),
-                    port=mqtt_data.get("port", config.mqtt.port),
-                    topics=topics,
-                    username=mqtt_data.get("username"),
-                    password=mqtt_data.get("password"),
-                )
+            config.mqtt = MQTTConfig(
+                broker=mqtt_data.get("broker", config.mqtt.broker),
+                port=mqtt_data.get("port", config.mqtt.port),
+                topics=topics,
+                username=mqtt_data.get("username"),
+                password=mqtt_data.get("password"),
+            )
 
-            # Parse GPIO config
-            if "gpio" in data:
-                gpio_data = data["gpio"]
-                pins = []
-                if "pins" in gpio_data:
-                    pins = _parse_gpio_pins(gpio_data["pins"])
+        # Parse GPIO config
+        if "gpio" in data:
+            gpio_data = data["gpio"]
+            pins = []
+            if "pins" in gpio_data:
+                pins = _parse_gpio_pins(gpio_data["pins"])
 
-                config.gpio = GPIOConfig(
-                    pins=pins,
-                    mock=gpio_data.get("mock", False),
-                )
+            config.gpio = GPIOConfig(
+                pins=pins,
+                mock=gpio_data.get("mock", False),
+            )
 
-            # Parse agent config
-            if "agent" in data:
-                agent_data = data["agent"]
-                config.agent = AgentConfig(
-                    mode=agent_data.get("mode", config.agent.mode),
-                    edge_publish_interval_seconds=agent_data.get(
-                        "edge_publish_interval_seconds",
-                        config.agent.edge_publish_interval_seconds,
-                    ),
-                    edge_include_metadata=agent_data.get(
-                        "edge_include_metadata",
-                        config.agent.edge_include_metadata,
-                    ),
-                    system_prompt=agent_data.get(
-                        "system_prompt", config.agent.system_prompt
-                    ),
-                    max_tool_iterations=agent_data.get(
-                        "max_tool_iterations", config.agent.max_tool_iterations
-                    ),
-                    ollama_retry_attempts=agent_data.get(
-                        "ollama_retry_attempts", config.agent.ollama_retry_attempts
-                    ),
-                    ollama_retry_backoff_seconds=agent_data.get(
-                        "ollama_retry_backoff_seconds", config.agent.ollama_retry_backoff_seconds
-                    ),
-                    ollama_fallback_mode=agent_data.get(
-                        "ollama_fallback_mode", config.agent.ollama_fallback_mode
-                    ),
-                )
+        # Parse agent config
+        if "agent" in data:
+            agent_data = data["agent"]
+            config.agent = AgentConfig(
+                mode=agent_data.get("mode", config.agent.mode),
+                edge_publish_interval_seconds=agent_data.get(
+                    "edge_publish_interval_seconds",
+                    config.agent.edge_publish_interval_seconds,
+                ),
+                edge_include_metadata=agent_data.get(
+                    "edge_include_metadata",
+                    config.agent.edge_include_metadata,
+                ),
+                system_prompt=agent_data.get(
+                    "system_prompt", config.agent.system_prompt
+                ),
+                max_tool_iterations=agent_data.get(
+                    "max_tool_iterations", config.agent.max_tool_iterations
+                ),
+                ollama_retry_attempts=agent_data.get(
+                    "ollama_retry_attempts", config.agent.ollama_retry_attempts
+                ),
+                ollama_retry_backoff_seconds=agent_data.get(
+                    "ollama_retry_backoff_seconds", config.agent.ollama_retry_backoff_seconds
+                ),
+                ollama_fallback_mode=agent_data.get(
+                    "ollama_fallback_mode", config.agent.ollama_fallback_mode
+                ),
+            )
 
-            # Parse memory config
-            if "memory" in data:
-                mem_data = data["memory"]
-                config.memory = MemoryConfig(
-                    db_path=mem_data.get("db_path", config.memory.db_path),
-                    embedding_provider=mem_data.get(
-                        "embedding_provider", config.memory.embedding_provider
-                    ),
-                    embedding_model=mem_data.get(
-                        "embedding_model", config.memory.embedding_model
-                    ),
-                    observation_enabled=mem_data.get(
-                        "observation_enabled", config.memory.observation_enabled
-                    ),
-                    observation_interval_minutes=mem_data.get(
-                        "observation_interval_minutes",
-                        config.memory.observation_interval_minutes,
-                    ),
-                    observation_lookback_minutes=mem_data.get(
-                        "observation_lookback_minutes",
-                        config.memory.observation_lookback_minutes,
-                    ),
-                    observation_domains_mode=mem_data.get(
-                        "observation_domains_mode",
-                        config.memory.observation_domains_mode,
-                    ),
-                    sensor_log_retention_days=mem_data.get(
-                        "sensor_log_retention_days",
-                        config.memory.sensor_log_retention_days,
-                    ),
-                    observation_max_age_days=mem_data.get(
-                        "observation_max_age_days",
-                        config.memory.observation_max_age_days,
-                    ),
-                    readings_max_age_days=mem_data.get(
-                        "readings_max_age_days",
-                        config.memory.readings_max_age_days,
-                    ),
-                    compact_memory_threshold_mb=mem_data.get(
-                        "compact_memory_threshold_mb",
-                        config.memory.compact_memory_threshold_mb,
-                    ),
-                    compact_batch_size=mem_data.get(
-                        "compact_batch_size",
-                        config.memory.compact_batch_size,
-                    ),
-                )
+        # Parse memory config
+        if "memory" in data:
+            mem_data = data["memory"]
+            config.memory = MemoryConfig(
+                db_path=mem_data.get("db_path", config.memory.db_path),
+                embedding_provider=mem_data.get(
+                    "embedding_provider", config.memory.embedding_provider
+                ),
+                embedding_model=mem_data.get(
+                    "embedding_model", config.memory.embedding_model
+                ),
+                observation_enabled=mem_data.get(
+                    "observation_enabled", config.memory.observation_enabled
+                ),
+                observation_interval_minutes=mem_data.get(
+                    "observation_interval_minutes",
+                    config.memory.observation_interval_minutes,
+                ),
+                observation_lookback_minutes=mem_data.get(
+                    "observation_lookback_minutes",
+                    config.memory.observation_lookback_minutes,
+                ),
+                observation_domains_mode=mem_data.get(
+                    "observation_domains_mode",
+                    config.memory.observation_domains_mode,
+                ),
+                sensor_log_retention_days=mem_data.get(
+                    "sensor_log_retention_days",
+                    config.memory.sensor_log_retention_days,
+                ),
+                observation_max_age_days=mem_data.get(
+                    "observation_max_age_days",
+                    config.memory.observation_max_age_days,
+                ),
+                readings_max_age_days=mem_data.get(
+                    "readings_max_age_days",
+                    config.memory.readings_max_age_days,
+                ),
+                compact_memory_threshold_mb=mem_data.get(
+                    "compact_memory_threshold_mb",
+                    config.memory.compact_memory_threshold_mb,
+                ),
+                compact_batch_size=mem_data.get(
+                    "compact_batch_size",
+                    config.memory.compact_batch_size,
+                ),
+            )
 
-            # Parse frames config
-            if "frames" in data:
-                frames_data = data["frames"]
-                defaults = FramesConfig()
-                config.frames = FramesConfig(
-                    enabled=frames_data.get("enabled", defaults.enabled),
-                    db_path=frames_data.get("db_path", defaults.db_path),
-                    thumbnail_dir=frames_data.get("thumbnail_dir", defaults.thumbnail_dir),
-                    clip_text_model=frames_data.get("clip_text_model", defaults.clip_text_model),
-                    clip_tokenizer=frames_data.get("clip_tokenizer", defaults.clip_tokenizer),
-                    context_length=frames_data.get("context_length", defaults.context_length),
-                    retention_days=frames_data.get("retention_days", defaults.retention_days),
-                    archive_dir=frames_data.get("archive_dir", defaults.archive_dir),
-                    archive_command=frames_data.get("archive_command", defaults.archive_command),
-                    activity_prompts=frames_data.get("activity_prompts", defaults.activity_prompts),
-                    activity_default_threshold=frames_data.get(
-                        "activity_default_threshold", defaults.activity_default_threshold
-                    ),
-                    activity_score_keyframes=frames_data.get(
-                        "activity_score_keyframes", defaults.activity_score_keyframes
-                    ),
-                    spool_dir=frames_data.get("spool_dir", defaults.spool_dir),
-                    publish_batch=frames_data.get("publish_batch", defaults.publish_batch),
-                    spool_max_entries=frames_data.get("spool_max_entries", defaults.spool_max_entries),
-                )
+        # Parse frames config
+        if "frames" in data:
+            frames_data = data["frames"]
+            defaults = FramesConfig()
+            config.frames = FramesConfig(
+                enabled=frames_data.get("enabled", defaults.enabled),
+                db_path=frames_data.get("db_path", defaults.db_path),
+                thumbnail_dir=frames_data.get("thumbnail_dir", defaults.thumbnail_dir),
+                clip_text_model=frames_data.get("clip_text_model", defaults.clip_text_model),
+                clip_tokenizer=frames_data.get("clip_tokenizer", defaults.clip_tokenizer),
+                context_length=frames_data.get("context_length", defaults.context_length),
+                retention_days=frames_data.get("retention_days", defaults.retention_days),
+                archive_dir=frames_data.get("archive_dir", defaults.archive_dir),
+                archive_command=frames_data.get("archive_command", defaults.archive_command),
+                activity_prompts=frames_data.get("activity_prompts", defaults.activity_prompts),
+                activity_default_threshold=frames_data.get(
+                    "activity_default_threshold", defaults.activity_default_threshold
+                ),
+                activity_score_keyframes=frames_data.get(
+                    "activity_score_keyframes", defaults.activity_score_keyframes
+                ),
+                spool_dir=frames_data.get("spool_dir", defaults.spool_dir),
+                publish_batch=frames_data.get("publish_batch", defaults.publish_batch),
+                spool_max_entries=frames_data.get("spool_max_entries", defaults.spool_max_entries),
+            )
 
-            # Parse sync config
-            if "sync" in data:
-                sync_data = data["sync"]
-                config.sync = SyncConfig(
-                    enabled=sync_data.get("enabled", config.sync.enabled),
-                    llama_url=sync_data.get("llama_url", config.sync.llama_url),
-                    sync_interval_minutes=sync_data.get(
-                        "sync_interval_minutes", config.sync.sync_interval_minutes
-                    ),
-                    retry_max_attempts=sync_data.get(
-                        "retry_max_attempts", config.sync.retry_max_attempts
-                    ),
-                    batch_size=sync_data.get("batch_size", config.sync.batch_size),
-                    crdt_db_path=sync_data.get(
-                        "crdt_db_path", config.sync.crdt_db_path
-                    ),
-                )
+        # Parse sync config
+        if "sync" in data:
+            sync_data = data["sync"]
+            config.sync = SyncConfig(
+                enabled=sync_data.get("enabled", config.sync.enabled),
+                llama_url=sync_data.get("llama_url", config.sync.llama_url),
+                sync_interval_minutes=sync_data.get(
+                    "sync_interval_minutes", config.sync.sync_interval_minutes
+                ),
+                retry_max_attempts=sync_data.get(
+                    "retry_max_attempts", config.sync.retry_max_attempts
+                ),
+                batch_size=sync_data.get("batch_size", config.sync.batch_size),
+                crdt_db_path=sync_data.get(
+                    "crdt_db_path", config.sync.crdt_db_path
+                ),
+            )
 
-            # Parse mem0 config
-            if "mem0" in data:
-                mem0_data = data["mem0"]
-                config.mem0 = Mem0Config(
-                    enabled=mem0_data.get("enabled", config.mem0.enabled),
-                    server_url=mem0_data.get("server_url", config.mem0.server_url),
-                    bridge_enabled=mem0_data.get(
-                        "bridge_enabled", config.mem0.bridge_enabled
-                    ),
-                    index_observations=mem0_data.get(
-                        "index_observations", config.mem0.index_observations
-                    ),
-                    index_memories=mem0_data.get(
-                        "index_memories", config.mem0.index_memories
-                    ),
-                    bridge_interval_seconds=mem0_data.get(
-                        "bridge_interval_seconds", config.mem0.bridge_interval_seconds
-                    ),
-                    compose_file=mem0_data.get(
-                        "compose_file", config.mem0.compose_file
-                    ),
-                )
+        # Parse mem0 config
+        if "mem0" in data:
+            mem0_data = data["mem0"]
+            config.mem0 = Mem0Config(
+                enabled=mem0_data.get("enabled", config.mem0.enabled),
+                server_url=mem0_data.get("server_url", config.mem0.server_url),
+                bridge_enabled=mem0_data.get(
+                    "bridge_enabled", config.mem0.bridge_enabled
+                ),
+                index_observations=mem0_data.get(
+                    "index_observations", config.mem0.index_observations
+                ),
+                index_memories=mem0_data.get(
+                    "index_memories", config.mem0.index_memories
+                ),
+                bridge_interval_seconds=mem0_data.get(
+                    "bridge_interval_seconds", config.mem0.bridge_interval_seconds
+                ),
+                compose_file=mem0_data.get(
+                    "compose_file", config.mem0.compose_file
+                ),
+            )
 
-            # Parse discovery config
-            if "discovery" in data:
-                disc_data = data["discovery"]
-                config.discovery = DiscoveryConfig(
-                    enabled=disc_data.get("enabled", config.discovery.enabled),
-                    service_type=disc_data.get("service_type", config.discovery.service_type),
-                    announce=disc_data.get("announce", config.discovery.announce),
-                    browse=disc_data.get("browse", config.discovery.browse),
-                    cache_ttl_seconds=disc_data.get(
-                        "cache_ttl_seconds", config.discovery.cache_ttl_seconds
-                    ),
-                    discovery_timeout_seconds=disc_data.get(
-                        "discovery_timeout_seconds", config.discovery.discovery_timeout_seconds
-                    ),
-                )
+        # Parse discovery config
+        if "discovery" in data:
+            disc_data = data["discovery"]
+            config.discovery = DiscoveryConfig(
+                enabled=disc_data.get("enabled", config.discovery.enabled),
+                service_type=disc_data.get("service_type", config.discovery.service_type),
+                announce=disc_data.get("announce", config.discovery.announce),
+                browse=disc_data.get("browse", config.discovery.browse),
+                cache_ttl_seconds=disc_data.get(
+                    "cache_ttl_seconds", config.discovery.cache_ttl_seconds
+                ),
+                discovery_timeout_seconds=disc_data.get(
+                    "discovery_timeout_seconds", config.discovery.discovery_timeout_seconds
+                ),
+            )
 
-            # Parse plugins config
-            if "plugins" in data:
-                plugins_data = data["plugins"]
-                builtin_plugins = {}
-                custom_plugins = []
+        # Parse plugins config
+        if "plugins" in data:
+            plugins_data = data["plugins"]
+            builtin_plugins = {}
+            custom_plugins = []
 
-                # Parse builtin plugins
-                if "builtin" in plugins_data:
-                    for plugin_name, plugin_data in plugins_data["builtin"].items():
-                        builtin_plugins[plugin_name] = BuiltinPluginConfig(
+            # Parse builtin plugins
+            if "builtin" in plugins_data:
+                for plugin_name, plugin_data in plugins_data["builtin"].items():
+                    builtin_plugins[plugin_name] = BuiltinPluginConfig(
+                        enabled=plugin_data.get("enabled", True),
+                        config=plugin_data.get("config", {}),
+                    )
+
+            # Parse custom plugins
+            if "custom" in plugins_data:
+                for plugin_data in plugins_data["custom"]:
+                    custom_plugins.append(
+                        CustomPluginConfig(
+                            name=plugin_data["name"],
                             enabled=plugin_data.get("enabled", True),
                             config=plugin_data.get("config", {}),
                         )
+                    )
 
-                # Parse custom plugins
-                if "custom" in plugins_data:
-                    for plugin_data in plugins_data["custom"]:
-                        custom_plugins.append(
-                            CustomPluginConfig(
-                                name=plugin_data["name"],
-                                enabled=plugin_data.get("enabled", True),
-                                config=plugin_data.get("config", {}),
-                            )
-                        )
-
-                config.plugins = PluginsConfig(
-                    paths=plugins_data.get("paths", []),
-                    builtin=builtin_plugins,
-                    custom=custom_plugins,
-                )
-            else:
-                # Backward compatibility: if no plugins config, auto-enable builtins
-                # with config from legacy gpio section
-                config.plugins = PluginsConfig(
-                    paths=[],
-                    builtin={
-                        "gpio": BuiltinPluginConfig(
-                            enabled=True,
-                            config={"mock": config.gpio.mock, "pins": []},
-                        ),
-                        "system": BuiltinPluginConfig(enabled=True, config={}),
-                    },
-                    custom=[],
-                )
+            config.plugins = PluginsConfig(
+                paths=plugins_data.get("paths", []),
+                builtin=builtin_plugins,
+                custom=custom_plugins,
+            )
+        else:
+            # Backward compatibility: if no plugins config, auto-enable builtins
+            # with config from legacy gpio section
+            config.plugins = PluginsConfig(
+                paths=[],
+                builtin={
+                    "gpio": BuiltinPluginConfig(
+                        enabled=True,
+                        config={"mock": config.gpio.mock, "pins": []},
+                    ),
+                    "system": BuiltinPluginConfig(enabled=True, config={}),
+                },
+                custom=[],
+            )
 
     # Apply environment variable overrides
     config = _apply_env_overrides(config)

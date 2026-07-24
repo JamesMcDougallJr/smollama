@@ -21,7 +21,7 @@ from .plugins.loader import PluginLoader
 from .readings import GPIOReadingProvider, MQTTBridgeProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
-from .tools.frame_tools import RecentActivityTool, SearchFramesTool
+from .tools.frame_tools import ClassifyClipTool, RecentActivityTool, SearchFramesTool
 from .tools.memory_tools import ObserveTool, RecallTool, RememberTool
 from .mem0 import Mem0Client, Mem0Bridge, CrossNodeRecallTool
 from .sync import CRDTLog, SyncClient
@@ -195,6 +195,8 @@ class Agent:
             if self._frames:
                 self._tools.register(SearchFramesTool(self._frames))
                 self._tools.register(RecentActivityTool(self._frames))
+                if self._frames.text_encoder is not None:
+                    self._tools.register(ClassifyClipTool(self._frames, self._frames.text_encoder))
             if self._mem0_client:
                 self._tools.register(CrossNodeRecallTool(self._mem0_client))
             for write_plugin in self._plugin_loader.get_write_plugins():

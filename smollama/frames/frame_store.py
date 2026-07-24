@@ -187,6 +187,10 @@ class FrameStore:
             (key, value),
         )
 
+    @property
+    def text_encoder(self) -> "ClipTextEncoder | None":
+        return self._text_encoder
+
     # ==================== Ingest ====================
 
     def ingest_payload(self, node_id: str, data: dict) -> int | None:
@@ -358,6 +362,34 @@ class FrameStore:
             FROM frames ORDER BY timestamp DESC LIMIT ?
             """,
             (limit,),
+        )
+        return [self._row_to_dict(row) for row in cursor]
+
+    def get_embedding(self, frame_id: int) -> list[float] | None:
+        """Return the stored embedding for a frame, or None if unavailable."""
+        conn = self._ensure_connected()
+        if not self._vec_available or self._dimension is None:
+            return None
+        row = conn.execute(
+            "SELECT embedding FROM frames_vec WHERE frame_id = ?", (frame_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return list(struct.unpack(f"<{self._dimension}f", row[0]))
+
+    def get_frames_in_range(
+        self, start: str, end: str, kind: str = "window"
+    ) -> list[dict[str, Any]]:
+        """Fetch frames by time range and kind (embeddings fetched separately via get_embedding)."""
+        conn = self._ensure_connected()
+        cursor = conn.execute(
+            f"""
+            SELECT {self._FRAME_COLUMNS}, NULL AS distance
+            FROM frames
+            WHERE kind = ? AND timestamp >= ? AND timestamp <= ?
+            ORDER BY timestamp
+            """,
+            (kind, start, end),
         )
         return [self._row_to_dict(row) for row in cursor]
 

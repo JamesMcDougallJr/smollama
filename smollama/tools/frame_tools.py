@@ -2,7 +2,10 @@
 
 from typing import Any
 
+import numpy as np
+
 from ..frames import FrameStore
+from ..frames.text_encoder import ClipTextEncoder
 from .base import Tool, ToolParameter
 
 
@@ -58,6 +61,114 @@ class SearchFramesTool(Tool):
                 }
                 for f in result["results"]
             ],
+        }
+
+
+class ClassifyClipTool(Tool):
+    """Zero-shot video classification for stored clips using CLIP embeddings."""
+
+    def __init__(self, store: FrameStore, text_encoder: ClipTextEncoder):
+        self._store = store
+        self._encoder = text_encoder
+
+    @property
+    def name(self) -> str:
+        return "classify_clip"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Classify a stored camera clip against custom text labels using "
+            "CLIP zero-shot video classification. Provide a frame_id (from "
+            "search_frames results) or a time range (start + end as ISO "
+            "timestamps). Returns a similarity score per label — highest score "
+            "is the predicted class. Works on both single keyframes and "
+            "temporal activity windows."
+        )
+
+    @property
+    def parameters(self) -> list[ToolParameter]:
+        return [
+            ToolParameter(
+                name="labels",
+                type="array",
+                description="Candidate text labels to classify against (e.g. ['person at door', 'delivery', 'empty scene'])",
+                required=True,
+            ),
+            ToolParameter(
+                name="frame_id",
+                type="integer",
+                description="ID of a specific frame/window to classify (from search_frames results)",
+                required=False,
+            ),
+            ToolParameter(
+                name="start",
+                type="string",
+                description="Start of time range to classify (ISO timestamp; pair with end)",
+                required=False,
+            ),
+            ToolParameter(
+                name="end",
+                type="string",
+                description="End of time range (ISO timestamp; pair with start)",
+                required=False,
+            ),
+        ]
+
+    async def execute(
+        self,
+        labels: list[str],
+        frame_id: int | None = None,
+        start: str | None = None,
+        end: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        if not labels:
+            return {"error": "labels list is required"}
+
+        # Resolve embedding
+        if frame_id is not None:
+            embedding = self._store.get_embedding(frame_id)
+            if embedding is None:
+                return {"error": f"No embedding found for frame {frame_id}"}
+            frame = self._store.get_frame(frame_id)
+            clip_ref = frame["timestamp"] if frame else f"frame_{frame_id}"
+        elif start and end:
+            frames = self._store.get_frames_in_range(start, end, kind="window")
+            if not frames:
+                frames = self._store.get_frames_in_range(start, end, kind="keyframe")
+            if not frames:
+                return {"error": f"No frames found between {start} and {end}"}
+
+            vecs = []
+            for f in frames:
+                emb = self._store.get_embedding(f["id"])
+                if emb:
+                    vecs.append(np.asarray(emb, dtype=np.float32))
+            if not vecs:
+                return {"error": "Embeddings not available (sqlite-vec required)"}
+
+            mean = np.mean(vecs, axis=0)
+            norm = float(np.linalg.norm(mean))
+            if norm > 0:
+                mean = mean / norm
+            embedding = mean.tolist()
+            clip_ref = f"{start} → {end} ({len(vecs)} frames)"
+        else:
+            return {"error": "Provide either frame_id or both start and end"}
+
+        # Score each label
+        clip_vec = np.asarray(embedding, dtype=np.float32)
+        scores: dict[str, float] = {}
+        for label in labels:
+            label_vec = np.asarray(self._encoder.embed_floats(label), dtype=np.float32)
+            scores[label] = round(float(np.dot(clip_vec, label_vec)), 4)
+
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return {
+            "clip": clip_ref,
+            "top_label": ranked[0][0] if ranked else None,
+            "scores": dict(ranked),
         }
 
 

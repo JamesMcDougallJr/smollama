@@ -180,9 +180,9 @@ class FrameEmbedder(object):
         window_sample_interval=1.0,
         window_min_samples=2,
         window_idle_grace_seconds=2.0,
+        activity_only=False,
     ):
         import numpy as np
-        import onnxruntime as ort
 
         self._np = np
         self.spool_dir = spool_dir
@@ -190,6 +190,8 @@ class FrameEmbedder(object):
         self.max_spool = max_spool
         self.thumb_width = thumb_width
         self.jpeg_quality = jpeg_quality
+
+        self.activity_only = activity_only
 
         self._windows = None
         if windows_enabled:
@@ -208,19 +210,26 @@ class FrameEmbedder(object):
         self._mean = np.asarray(self.meta["mean"], dtype=np.float32)
         self._std = np.asarray(self.meta["std"], dtype=np.float32)
 
-        if providers is None:
-            # Prefer GPU EPs when the JetPack onnxruntime-gpu wheel is installed
-            wanted = [
-                "TensorrtExecutionProvider",
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider",
-            ]
-            available = ort.get_available_providers()
-            providers = [p for p in wanted if p in available]
+        onnx_path = os.path.join(model_dir, "image_encoder.onnx")
 
-        self._session = ort.InferenceSession(
-            os.path.join(model_dir, "image_encoder.onnx"), providers=providers
-        )
+        # Try onnxruntime first (NVIDIA box.com wheel for JetPack 4.6),
+        # fall back to TensorRT via trt_session.TRTSession (already in JetPack).
+        try:
+            import onnxruntime as ort
+            if providers is None:
+                wanted = [
+                    "TensorrtExecutionProvider",
+                    "CUDAExecutionProvider",
+                    "CPUExecutionProvider",
+                ]
+                available = ort.get_available_providers()
+                providers = [p for p in wanted if p in available]
+            self._session = ort.InferenceSession(onnx_path, providers=providers)
+        except ImportError:
+            logger.warning("onnxruntime not found — trying TensorRT fallback")
+            from trt_session import TRTSession
+            self._session = TRTSession(onnx_path)
+
         self._input_name = self._session.get_inputs()[0].name
         logger.info(
             "CLIP image encoder loaded (%s, %d-d, providers=%s)",
@@ -240,7 +249,7 @@ class FrameEmbedder(object):
         now = time.time()
         if self._last_state is not None and state != self._last_state:
             return "change"
-        if now - self._last_capture >= self.heartbeat_seconds:
+        if not self.activity_only and now - self._last_capture >= self.heartbeat_seconds:
             return "heartbeat"
         return None
 
@@ -271,7 +280,10 @@ class FrameEmbedder(object):
         if trigger is not None:
             try:
                 embedding = self.embed(rgb_image)
-                self._write_spool_entry(rgb_image, embedding, state, trigger)
+                # In activity_only + windows mode, keyframes feed the window
+                # aggregator but are not spooled — only window entries are sent.
+                if not (self.activity_only and self._windows is not None):
+                    self._write_spool_entry(rgb_image, embedding, state, trigger)
                 self._last_capture = now
             except Exception as e:
                 logger.error("Frame capture failed: %s", e)
