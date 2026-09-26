@@ -198,26 +198,40 @@ def main() -> int:
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
-    # Reference embedding for the Nano parity check (clip_spike.py --parity)
+    # Reference embedding for the Nano parity check (clip_spike.py --parity).
+    # Computed from the exported ONNX (via onnxruntime) rather than the
+    # patched PyTorch model — this guarantees the reference matches what the
+    # Jetson runtime will produce, regardless of any monkey-patches.
     test_img = build_test_image(image_size)
-    with torch.no_grad():
-        ref = ImageEncoder(model)(torch.from_numpy(preprocess(test_img, image_size, mean, std)))
-    ref_floats = ref.numpy().reshape(-1).astype(float).tolist()
-    (out_dir / "reference.json").write_text(json.dumps({"embedding": ref_floats}))
+    test_inp = preprocess(test_img, image_size, mean, std)
 
-    # Sanity: run both graphs under onnxruntime and compare to torch
     try:
         import onnxruntime as ort
 
         sess = ort.InferenceSession(str(out_dir / "image_encoder.onnx"),
                                     providers=["CPUExecutionProvider"])
-        (out_ort,) = sess.run(None, {"image": preprocess(test_img, image_size, mean, std)})
-        cos = float(np.dot(out_ort.reshape(-1), np.asarray(ref_floats, dtype=np.float32)))
+        (out_ort,) = sess.run(None, {"image": test_inp})
+        ref_floats = out_ort.reshape(-1).astype(float).tolist()
+        (out_dir / "reference.json").write_text(json.dumps({"embedding": ref_floats}))
+
+        # Sanity: compare ONNX output to unpatched PyTorch (restore SDPA first)
+        if _orig_sdpa is not None:
+            _F.scaled_dot_product_attention = _orig_sdpa
+        with torch.no_grad():
+            pt_out = ImageEncoder(model)(torch.from_numpy(test_inp)).numpy().reshape(-1)
+        cos = float(np.dot(out_ort.reshape(-1).astype(np.float32), pt_out.astype(np.float32)))
         print(f"ONNX↔torch image parity (cosine): {cos:.6f}")
         if cos < 0.999:
             print("WARNING: parity below 0.999 — inspect the export before deploying")
     except ImportError:
-        print("onnxruntime not installed — skipping local parity check")
+        # No onnxruntime: fall back to unpatched PyTorch for reference
+        print("onnxruntime not installed — computing reference from unpatched PyTorch")
+        if _orig_sdpa is not None:
+            _F.scaled_dot_product_attention = _orig_sdpa
+        with torch.no_grad():
+            ref_t = ImageEncoder(model)(torch.from_numpy(test_inp))
+        ref_floats = ref_t.numpy().reshape(-1).astype(float).tolist()
+        (out_dir / "reference.json").write_text(json.dumps({"embedding": ref_floats}))
 
     print(f"\nDone. Files in {out_dir}:")
     for f in sorted(out_dir.iterdir()):

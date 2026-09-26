@@ -226,10 +226,10 @@ def main():
         try:
             cfg = _load_writer_cfg()
             embedder = FrameEmbedder(
-                model_dir=cfg.get("model_dir",
-                                  os.path.expanduser("~/clip-export")),
-                spool_dir=cfg.get("spool_dir",
-                                  os.path.expanduser("~/.smollama/frames_spool")),
+                model_dir=os.path.expanduser(
+                    cfg.get("model_dir", "~/clip-export")),
+                spool_dir=os.path.expanduser(
+                    cfg.get("spool_dir", "~/.smollama/frames_spool")),
                 heartbeat_seconds=cfg.get("heartbeat_seconds", 300),
                 activity_only=cfg.get("activity_only", False),
                 windows_enabled=cfg.get("windows_enabled", False),
