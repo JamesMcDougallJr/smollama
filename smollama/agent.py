@@ -98,6 +98,12 @@ class Agent:
                     compact_memory_threshold_mb=config.memory.compact_memory_threshold_mb,
                     compact_batch_size=config.memory.compact_batch_size,
                     domains_mode=config.memory.observation_domains_mode,
+                    num_predict=config.memory.observation_num_predict,
+                    max_items=config.memory.observation_max_items,
+                    max_chars=config.memory.observation_max_chars,
+                    structured_output=config.memory.observation_structured_output,
+                    use_tools=config.memory.observation_use_tools,
+                    system_prompt=config.memory.observation_system_prompt,
                 )
 
         # Initialize frame search (edge relays a camera writer's spool; master
@@ -495,12 +501,22 @@ class Agent:
         self,
         user_message: str,
         max_iterations: int | None = None,
+        options: dict[str, Any] | None = None,
+        format: str | dict[str, Any] | None = None,
+        use_tools: bool = True,
+        system: str | None = None,
     ) -> str | None:
         """Run the agentic tool loop.
 
         Args:
             user_message: Initial user/trigger message.
             max_iterations: Maximum tool call iterations (uses config default if None).
+            options: Ollama generation options (e.g. a num_predict cap).
+            format: Response format constraint: "json" or a JSON Schema dict.
+            use_tools: Offer tools to the model. Analysis-only calls should pass
+                False — the tool schemas cost prompt tokens and a single-shot
+                call has nothing to do with them.
+            system: Replace the node's configured system prompt for this call.
 
         Returns:
             Final text response from the LLM.
@@ -513,11 +529,11 @@ class Agent:
         max_iterations = max(1, max_iterations)
 
         messages = [
-            self._system_message,
+            {"role": "system", "content": system} if system else self._system_message,
             {"role": "user", "content": user_message},
         ]
 
-        tools = self._tools.to_ollama_format()
+        tools = self._tools.to_ollama_format() if use_tools else []
 
         for iteration in range(max_iterations):
             logger.debug(f"Agent loop iteration {iteration + 1}")
@@ -528,7 +544,9 @@ class Agent:
 
             for attempt in range(self.config.agent.ollama_retry_attempts):
                 try:
-                    response = await self._ollama.chat(messages, tools)
+                    response = await self._ollama.chat(
+                        messages, tools, options=options, format=format
+                    )
                     break  # Success, exit retry loop
                 except Exception as e:
                     last_error = e
@@ -637,16 +655,33 @@ class Agent:
                 logger.error(f"Frame retention failed: {e}", exc_info=True)
             await asyncio.sleep(24 * 3600)
 
-    async def query(self, prompt: str) -> str | None:
+    async def query(
+        self,
+        prompt: str,
+        options: dict[str, Any] | None = None,
+        format: str | dict[str, Any] | None = None,
+        use_tools: bool = True,
+        system: str | None = None,
+    ) -> str | None:
         """Send a direct query to the agent.
 
         Args:
             prompt: Query prompt.
+            options: Ollama generation options (e.g. {"num_predict": 256}).
+            format: Response format constraint: "json" or a JSON Schema dict.
+            use_tools: Whether to offer tools to the model.
+            system: Override the node's configured system prompt for this call.
+                Single-purpose calls should pass their own — the node prompt
+                describes a conversational orchestrator with tools, which works
+                against a constrained extraction task.
 
         Returns:
             Agent response.
         """
-        return await self._run_agent_loop(prompt)
+        return await self._run_agent_loop(
+            prompt, options=options, format=format, use_tools=use_tools,
+            system=system,
+        )
 
 
 async def run_agent(config: Config) -> None:

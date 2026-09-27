@@ -17,8 +17,16 @@ class NodeConfig:
 class OllamaConfig:
     host: str = "localhost"
     port: int = 11434
-    model: str = "gemma4:e2b"
-    keep_alive: str = "-1"  # how long to keep model in memory; -1=forever, "30m", "0"=unload
+    model: str = "qwen2.5:1.5b"
+    # How long Ollama keeps the model resident. Must be a Go duration WITH a
+    # unit: any negative value ("-1m", "-1s") means forever, "30m" expires,
+    # "0" unloads immediately. The bare string "-1" is rejected with
+    # 'time: missing unit in duration "-1"' (400) — it must carry a unit.
+    keep_alive: str = "-1m"
+    # Thinking models burn wall time on reasoning tokens Ollama neither counts in
+    # eval_duration nor returns in the response — measured 2.1 vs 5.0 tok/s on
+    # gemma4:e2b/Pi 5. Off by default; set true only if a model needs it.
+    think: bool = False
 
     @property
     def base_url(self) -> str:
@@ -79,6 +87,31 @@ class MemoryConfig:
     observation_interval_minutes: int = 15
     observation_lookback_minutes: int = 60
     observation_domains_mode: str = "replace"  # "replace" (domain pass takes the cycle's one LLM call) or "parallel" (generic + each domain per cycle)
+    # ── Observation pass shape ────────────────────────────────────────────────
+    # Defaults are tuned for a small local model (~1-2B) on CPU: bounded output,
+    # schema-constrained, no tools. Relax them when running a model capable of
+    # agentic behaviour — see docs/observation-tuning.md.
+    #
+    # Hard cap on generation; 0 = no cap (model decides). Uncapped, a small model
+    # writes multi-paragraph prose that gets discarded anyway — wasted wall time
+    # on CPU-only hardware.
+    observation_num_predict: int = 256
+    observation_max_items: int = 3       # max observations requested per cycle
+    observation_max_chars: int = 200     # max chars per observation text
+    # Constrain decoding to a JSON schema. Essential for small models (without it
+    # they return empty objects or overrun mid-object); a capable model may not
+    # need it. Mutually exclusive with observation_use_tools — a model cannot emit
+    # tool calls while its output is pinned to a schema.
+    observation_structured_output: bool = True
+    # Let the observation pass call tools (read sensors, search memory, act) and
+    # run the full multi-iteration agent loop instead of a single shot. Requires a
+    # model with real tool-calling ability; implies structured output is dropped.
+    observation_use_tools: bool = False
+    # System prompt for the observation pass:
+    #   ""       — built-in task prompt (terse, non-conversational, no tools)
+    #   "node"   — inherit agent.system_prompt, i.e. behave like the node persona
+    #   <text>   — use this literal prompt
+    observation_system_prompt: str = ""
     sensor_log_retention_days: int = 90
     observation_max_age_days: int = 3    # delete observations older than this on each loop tick
     readings_max_age_days: int = 7       # delete readings older than this on each loop tick
@@ -442,6 +475,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 port=ollama_data.get("port", config.ollama.port),
                 model=ollama_data.get("model", config.ollama.model),
                 keep_alive=ollama_data.get("keep_alive", config.ollama.keep_alive),
+                think=ollama_data.get("think", config.ollama.think),
             )
 
         # Parse MQTT config
@@ -526,6 +560,27 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 observation_domains_mode=mem_data.get(
                     "observation_domains_mode",
                     config.memory.observation_domains_mode,
+                ),
+                observation_num_predict=mem_data.get(
+                    "observation_num_predict",
+                    config.memory.observation_num_predict,
+                ),
+                observation_max_items=mem_data.get(
+                    "observation_max_items", config.memory.observation_max_items
+                ),
+                observation_max_chars=mem_data.get(
+                    "observation_max_chars", config.memory.observation_max_chars
+                ),
+                observation_structured_output=mem_data.get(
+                    "observation_structured_output",
+                    config.memory.observation_structured_output,
+                ),
+                observation_use_tools=mem_data.get(
+                    "observation_use_tools", config.memory.observation_use_tools
+                ),
+                observation_system_prompt=mem_data.get(
+                    "observation_system_prompt",
+                    config.memory.observation_system_prompt,
                 ),
                 sensor_log_retention_days=mem_data.get(
                     "sensor_log_retention_days",

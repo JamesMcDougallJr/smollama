@@ -41,27 +41,60 @@ class OllamaClient:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        options: dict[str, Any] | None = None,
+        format: str | dict[str, Any] | None = None,
+        think: bool | None = None,
     ) -> ChatResponse:
         """Send a chat request to Ollama.
 
         Args:
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions in Ollama format.
+            options: Ollama generation options, e.g. {"num_predict": 256}.
+                Without a num_predict cap the model generates until it decides
+                to stop, which on CPU-only hardware is unbounded wall time.
+            format: "json" for any valid JSON, or a JSON Schema dict to constrain
+                the shape itself. Prefer the schema: measured on this Pi, small
+                models given only "json" either return empty objects
+                (qwen2.5:1.5b) or enumerate every input and blow the token cap
+                mid-object (gemma3:1b). The same models with a schema produced
+                conformant, correctly-typed output in half the wall time.
+            think: Override the configured thinking mode for this call.
 
         Returns:
             ChatResponse with content and/or tool calls.
         """
+        kwargs: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "tools": tools or [],
+            "keep_alive": self.config.keep_alive,
+        }
+        if options:
+            kwargs["options"] = options
+        if format:
+            kwargs["format"] = format
+
+        # Thinking models spend wall time on reasoning tokens that Ollama does
+        # NOT count in eval_duration and does not return in the response, so it
+        # is pure cost here. Measured on gemma4:e2b/Pi 5: 2.1 tok/s with
+        # thinking vs 5.0 tok/s without.
+        effective_think = self.config.think if think is None else think
+        if effective_think is not None:
+            kwargs["think"] = effective_think
+
         # Run synchronous ollama call in thread pool
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: self._client.chat(
-                model=self.config.model,
-                messages=messages,
-                tools=tools or [],
-                keep_alive=self.config.keep_alive,
-            ),
-        )
+        try:
+            response = await loop.run_in_executor(
+                None, lambda: self._client.chat(**kwargs)
+            )
+        except TypeError:
+            # Older ollama-python / server without think support: retry without it
+            kwargs.pop("think", None)
+            response = await loop.run_in_executor(
+                None, lambda: self._client.chat(**kwargs)
+            )
 
         # Parse tool calls from response
         tool_calls = []

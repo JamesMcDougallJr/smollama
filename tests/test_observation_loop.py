@@ -260,16 +260,120 @@ class TestResponseProcessing:
         assert mock_store.get_stats()["observations_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_process_invalid_json(
+    async def test_process_invalid_json_stores_nothing(
         self, observation_loop, mock_agent, mock_store
     ):
-        """Test handling invalid JSON gracefully."""
+        """An unparseable response is discarded, not stored as observation text.
+
+        Storing it used to put JSON fragments and essay preambles into the store
+        as observation text; since observations are embedded and fed back in as
+        "relevant past observations", that junk compounded into later prompts.
+        """
         mock_agent.query = AsyncMock(return_value="This is not valid JSON at all")
 
         await observation_loop.run_once()
 
-        # Should store raw response as observation
-        assert mock_store.get_stats()["observations_count"] == 1
+        assert mock_store.get_stats()["observations_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_process_truncated_json_stores_nothing(
+        self, observation_loop, mock_agent, mock_store
+    ):
+        """The real failure mode: generation cut off mid-object."""
+        mock_agent.query = AsyncMock(
+            return_value='```json\n{\n  "observations": [\n    {\n      "text": "The hcsr04'
+        )
+
+        await observation_loop.run_once()
+
+        assert mock_store.get_stats()["observations_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_observation_query_is_capped_and_structured(
+        self, observation_loop, mock_agent, mock_store
+    ):
+        """The LLM call must bound generation and demand JSON, without tools."""
+        mock_agent.query = AsyncMock(
+            return_value=json.dumps({"observations": [], "memories": []})
+        )
+
+        await observation_loop.run_once()
+
+        assert mock_agent.query.await_count >= 1
+        kwargs = mock_agent.query.await_args.kwargs
+        # A JSON schema, not the looser format="json"
+        assert isinstance(kwargs["format"], dict)
+        assert kwargs["format"]["properties"]["observations"]["maxItems"] == 3
+        assert kwargs["options"]["num_predict"] > 0
+        assert kwargs["use_tools"] is False
+        # Must override the node's conversational system prompt
+        from smollama.memory.observation_loop import OBSERVATION_SYSTEM_PROMPT
+        assert kwargs["system"] == OBSERVATION_SYSTEM_PROMPT
+        assert "not an assistant" in kwargs["system"]
+
+
+class TestObservationPassIsConfigurable:
+    """The pass shape must be tunable for a model more capable than a 1-2B local one."""
+
+    @staticmethod
+    def _loop(mock_store, mock_readings, mock_agent, **kw):
+        return ObservationLoop(
+            store=mock_store, readings=mock_readings, agent=mock_agent,
+            interval_minutes=15, lookback_minutes=60, **kw,
+        )
+
+    @pytest.mark.asyncio
+    async def test_tools_can_be_enabled(self, mock_store, mock_readings, mock_agent):
+        loop = self._loop(mock_store, mock_readings, mock_agent, use_tools=True)
+        await loop.run_once()
+        assert mock_agent.query.await_args.kwargs["use_tools"] is True
+
+    @pytest.mark.asyncio
+    async def test_tools_win_over_schema_when_both_requested(
+        self, mock_store, mock_readings, mock_agent, caplog
+    ):
+        """A schema pins decoding, leaving no room for tool calls — tools win, loudly."""
+        loop = self._loop(mock_store, mock_readings, mock_agent,
+                          use_tools=True, structured_output=True)
+        assert "mutually exclusive" in caplog.text
+        await loop.run_once()
+        kwargs = mock_agent.query.await_args.kwargs
+        assert kwargs["use_tools"] is True
+        assert kwargs["format"] is None
+
+    @pytest.mark.asyncio
+    async def test_structured_output_can_be_disabled(
+        self, mock_store, mock_readings, mock_agent
+    ):
+        loop = self._loop(mock_store, mock_readings, mock_agent, structured_output=False)
+        await loop.run_once()
+        assert mock_agent.query.await_args.kwargs["format"] is None
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_node_inherits_agent_persona(
+        self, mock_store, mock_readings, mock_agent
+    ):
+        """"node" means: don't override, let the agent use its configured prompt."""
+        loop = self._loop(mock_store, mock_readings, mock_agent, system_prompt="node")
+        await loop.run_once()
+        assert mock_agent.query.await_args.kwargs["system"] is None
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_literal_override(
+        self, mock_store, mock_readings, mock_agent
+    ):
+        loop = self._loop(mock_store, mock_readings, mock_agent,
+                          system_prompt="You are a lab instrument.")
+        await loop.run_once()
+        assert mock_agent.query.await_args.kwargs["system"] == "You are a lab instrument."
+
+    @pytest.mark.asyncio
+    async def test_num_predict_zero_means_uncapped(
+        self, mock_store, mock_readings, mock_agent
+    ):
+        loop = self._loop(mock_store, mock_readings, mock_agent, num_predict=0)
+        await loop.run_once()
+        assert mock_agent.query.await_args.kwargs["options"] is None
 
     @pytest.mark.asyncio
     async def test_process_empty_observations(

@@ -27,10 +27,16 @@ Recent reading history:
 Relevant past observations:
 {past_observations}
 
-Your task:
-1. Identify any notable patterns, trends, or anomalies
-2. Note any significant changes from previous observations
-3. Record important observations that should be remembered
+Report only what is genuinely noteworthy: a pattern, a trend, an anomaly, or a
+change from the past observations above. Steady, unremarkable readings warrant
+no observation — return empty lists.
+
+Rules:
+- At most {max_items} observations. Fewer is better. None is fine.
+- Each "text" must be one sentence, under {max_chars} characters.
+- State the reading and the number that justifies it. No preamble, no
+  restating the input, no advice, no speculation.
+- Output JSON only — no prose before or after it.
 
 Respond with a JSON object containing:
 {{
@@ -48,9 +54,69 @@ Respond with a JSON object containing:
             "confidence": 0.0-1.0
         }}
     ]
-}}
+}}"""
 
-Only include observations if there's something noteworthy. Empty lists are fine if readings are normal."""
+
+OBSERVATION_SYSTEM_PROMPT = """You are a sensor-monitoring function, not an assistant.
+
+You receive sensor readings and return JSON matching the provided schema. You do \
+not call tools, ask questions, greet, explain your reasoning, or write prose \
+outside the JSON.
+
+Report only what is genuinely noteworthy. Unremarkable readings warrant nothing: \
+empty lists are the correct answer more often than not."""
+
+
+def build_observation_schema(max_items: int, max_chars: int) -> dict:
+    """JSON Schema constraining the observation response.
+
+    Ollama enforces this during decoding, which matters far more than the prompt
+    text on small models. Measured on this Pi with an 11-source prompt: given
+    only format="json", qwen2.5:1.5b returned empty objects and gemma3:1b
+    enumerated every input until it blew the token cap mid-object (unparseable).
+    The same two models under this schema both produced conformant, correctly
+    typed output — qwen in a third of the wall time of the 5B model.
+
+    maxItems/maxLength do the work the prompt was only asking for politely.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "observations": {
+                "type": "array",
+                "maxItems": max_items,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "maxLength": max_chars},
+                        "type": {
+                            "type": "string",
+                            "enum": ["pattern", "anomaly", "status"],
+                        },
+                        "confidence": {"type": "number"},
+                        "related_sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["text", "type", "confidence"],
+                },
+            },
+            "memories": {
+                "type": "array",
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "fact": {"type": "string", "maxLength": max_chars},
+                        "confidence": {"type": "number"},
+                    },
+                    "required": ["fact", "confidence"],
+                },
+            },
+        },
+        "required": ["observations", "memories"],
+    }
 
 
 class ObservationLoop:
@@ -69,6 +135,12 @@ class ObservationLoop:
         compact_memory_threshold_mb: int = 200,
         compact_batch_size: int = 20,
         domains_mode: str = "replace",
+        num_predict: int = 256,
+        max_items: int = 3,
+        max_chars: int = 200,
+        structured_output: bool = True,
+        use_tools: bool = False,
+        system_prompt: str = "",
     ):
         """Initialize the observation loop.
 
@@ -102,6 +174,35 @@ class ObservationLoop:
         self._compact_batch_size = compact_batch_size
         self._domains_mode = domains_mode
         self._domain_rotation = 0  # replace-mode round-robin cursor
+        self._num_predict = num_predict
+        self._max_items = max_items
+        self._max_chars = max_chars
+        self._use_tools = use_tools
+
+        # Verified against Ollama: with tools AND a schema, the model emitted zero
+        # tool calls and its output was forced into the schema instead; with tools
+        # and no schema the same model emitted a real tool call. So a schema
+        # silently disables tool use — resolve the conflict loudly here rather
+        # than letting it look like the model simply chose not to act.
+        self._structured_output = structured_output
+        if structured_output and use_tools:
+            logger.warning(
+                "observation_structured_output and observation_use_tools are "
+                "mutually exclusive (a schema leaves no room for tool calls) — "
+                "honouring use_tools and dropping the schema."
+            )
+            self._structured_output = False
+        self._schema = (
+            build_observation_schema(max_items, max_chars)
+            if self._structured_output
+            else None
+        )
+
+        # "" = built-in task prompt; "node" = inherit the node persona; else literal
+        if system_prompt == "node":
+            self._system_prompt = None  # None => agent uses its configured prompt
+        else:
+            self._system_prompt = system_prompt or OBSERVATION_SYSTEM_PROMPT
         # Imported here rather than at module level: plugins.base transitively
         # imports this module (via tools -> memory), so a top-level import is
         # circular when the plugins package is imported first.
@@ -256,6 +357,8 @@ class ObservationLoop:
             current_readings=self._format_current_readings(readings),
             recent_history=self._format_history(history),
             past_observations=self._format_past_observations(past_obs),
+            max_items=self._max_items,
+            max_chars=self._max_chars,
         )
 
         await self._query_and_store(prompt, readings, pass_name="generic")
@@ -312,7 +415,20 @@ class ObservationLoop:
         ]
 
         try:
-            response = await self._agent.query(prompt)
+            # A JSON *schema* (not just format="json") is what actually holds
+            # small models to shape — see build_observation_schema. num_predict
+            # bounds wall time; no tools because this is single-shot analysis.
+            # Shape of the call is configurable so a capable model can be let off
+            # the leash (tools, unbounded output, node persona) while a small one
+            # stays pinned. See the observation_* keys in MemoryConfig.
+            response = await self._agent.query(
+                prompt,
+                options=({"num_predict": self._num_predict}
+                         if self._num_predict > 0 else None),
+                format=self._schema,
+                use_tools=self._use_tools,
+                system=self._system_prompt,
+            )
 
             if not response:
                 logger.warning(
@@ -475,20 +591,19 @@ class ObservationLoop:
                 logger.info(f"Stored memory: {mem['fact'][:50]}...")
 
         except json.JSONDecodeError:
-            # Response wasn't valid JSON, try to extract text as single observation
-            if response and len(response) > 10:
-                if len(response) > 500:
-                    logger.warning(
-                        f"LLM response truncated from {len(response)} to 500 chars"
-                    )
-                self._store.add_observation(
-                    text=response[:500],
-                    observation_type="general",
-                    confidence=0.6,
-                    session_id=session_id,
-                    input_snapshot=input_snapshot,
-                )
-                logger.debug("Stored raw response as observation")
+            # Do NOT fall back to storing the raw text. An unparseable response
+            # means the model didn't do the task, and its output is usually a
+            # half-emitted JSON object or an essay preamble. Storing that put
+            # fragments like '{"observations": [{"text": ...' into the store as
+            # observation *text* — and because observations are embedded and fed
+            # back in as "relevant past observations", the junk compounded into
+            # later prompts. Skipping loses nothing: the readings are already
+            # logged, so the next cycle sees the same data.
+            logger.warning(
+                "Discarding unparseable observation response (%d chars): %s",
+                len(response or ""),
+                (response or "")[:120].replace("\n", " "),
+            )
         except Exception as e:
             logger.error(f"Failed to process observation response: {e}")
 
