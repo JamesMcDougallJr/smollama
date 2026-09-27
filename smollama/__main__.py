@@ -234,6 +234,18 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     print(f"Node: {config.node.name}")
     print(f"URL: http://{args.host}:{args.port}")
 
+    # Rules live in memory.db alongside the readings_log their thresholds are fitted
+    # from, so there is one file to back up and no cross-database joins. The table is
+    # created on connect if absent, which is why this is safe before any rule exists.
+    rules = None
+    try:
+        from .rules import RuleStore
+
+        rules = RuleStore(config.memory.db_path)
+        rules.connect()
+    except Exception as e:
+        logger.warning(f"Rule store unavailable, /rules will be degraded: {e}")
+
     app = create_app(
         config,
         store=store,
@@ -242,6 +254,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         discovery_manager=discovery_manager,
         observers=plugin_loader.get_observer_plugins(),
         frames=frames,
+        rules=rules,
     )
 
     try:

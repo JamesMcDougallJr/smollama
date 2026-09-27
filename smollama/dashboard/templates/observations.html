@@ -99,6 +99,26 @@
                             </span>
                             <span>{{ (obs.confidence * 100)|int }}% confidence</span>
                         </div>
+                        {# Keep/dismiss is the only ground truth the system has about
+                           whether an observation was worth surfacing. Without it,
+                           automated judgement about rule quality optimises a proxy. #}
+                        <div class="mt-3 flex items-center gap-2">
+                            <form method="post" action="/api/observations/{{ obs.id }}/feedback/keep">
+                                <button class="rounded px-2 py-1 text-xs font-medium transition-colors
+                                    {% if obs.verdict == 'keep' %}bg-teal-600 text-white{% else %}border border-slate-300 text-slate-600 hover:bg-slate-50{% endif %}">
+                                    Useful
+                                </button>
+                            </form>
+                            <form method="post" action="/api/observations/{{ obs.id }}/feedback/dismiss">
+                                <button class="rounded px-2 py-1 text-xs font-medium transition-colors
+                                    {% if obs.verdict == 'dismiss' %}bg-slate-700 text-white{% else %}border border-slate-300 text-slate-600 hover:bg-slate-50{% endif %}">
+                                    Not useful
+                                </button>
+                            </form>
+                            {% if obs.verdict %}
+                            <span class="text-xs text-slate-400">recorded &mdash; click either to change</span>
+                            {% endif %}
+                        </div>
                     </div>
                     {% if obs.similarity %}
                     <div class="ml-4 shrink-0">

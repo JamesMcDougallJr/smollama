@@ -1,7 +1,8 @@
 # Design: Derived Rules and Closed-Loop Observation
 
-**Status: Tiers 1–2 implemented (`smollama/detectors/`, `smollama/rules/`); Tier 3
-and all LLM authoring still proposed.** The design was written before any code so
+**Status: Phases 1–6 implemented. Phase 7 (live actuation) deliberately not.**
+`smollama/detectors/`, `smollama/rules/`, `smollama/actions/`, plus the `/rules`
+page and the keep/dismiss control on `/observations`. The design was written before any code so
 the shape could be argued with first; see *What building phases 1–2 changed about
 this design* near the end for where it turned out to be wrong.
 
@@ -286,15 +287,36 @@ Each phase is shippable and gated on evidence from the previous one.
 | Phase | Scope | Validation gate |
 |---|---|---|
 | 1 | Detectors + candidate signals, no LLM | **DONE** — `smollama/detectors/`. Fires on the real stuck `hcsr04` (486 readings at 0.0); staleness validated by replaying real data with an advanced clock. |
-| 2 | Rules table, `fit:` resolver, deterministic retirement | **DONE** — `smollama/rules/`. Rules survive restart; auto-mute fires on a deliberately noisy rule. Dashboard view still outstanding. |
-| 3 | Dashboard keep/dismiss feedback | Labels accumulate before anything depends on them. |
-| 4 | LLM rule authoring, bounded, `proposed` only | Human promotes every rule for the first N. Compare generated rules against the hand-known failures. |
-| 5 | LLM review/retire on nominated candidates | Reason log reviewed by hand; churn metric stable. |
-| 6 | Tier 3 in `dry_run` only | A week of intended-action logs inspected. |
-| 7 | Tier 3 live, one actuator, tight bounds | Manual kill switch tested first. |
+| 2 | Rules table, `fit:` resolver, deterministic retirement, dashboard view | **DONE** — `smollama/rules/` + `/rules`. Rules survive restart; auto-mute fires on a deliberately noisy rule; proposed rules are promotable by hand. |
+| 3 | Dashboard keep/dismiss feedback | **DONE** — `observation_feedback` in memory.db + a control on `/observations`. `feedback_summary()` returns `keep_rate: None` rather than 0.0 with no labels, so an absent rate is never mistaken for evidence. |
+| 4 | LLM rule authoring, bounded, `proposed` only | **DONE** — `rules/author.py`. `threshold_spec` is a closed enum of `fit:` specs with no `literal:` option; sources are validated against the signals the model was shown; authored rules land `proposed` and cover nothing. |
+| 5 | LLM review/retire on nominated candidates | **DONE** — `rules/review.py`. Deterministic triage nominates ≤5; four-way keep/retune/mute/retire; `retune` delegates to the `fit:` resolver; retiring a rule that has ever fired is refused outright. |
+| 6 | Tier 3 in `dry_run` only | **DONE** — `smollama/actions/`. Nothing executes: `propose_action` evaluates against the envelope and returns a decision, and no actuator is wired to it. Defaults `enabled=False`, `dry_run=True`. |
+| 7 | Tier 3 live, one actuator, tight bounds | **NOT DONE, deliberately.** See below. |
 
 Phase 1 alone resolves the stated problem. Phases 4+ are optional and should be
 justified by Phase 1–3 evidence, not assumed.
+
+### Why Phase 7 is not implemented
+
+Everything through Phase 6 is reversible: a bad detector makes noise, a bad rule is
+muted, a bad action proposal is logged and discarded. Phase 7 is the first step
+where being wrong moves hardware.
+
+Two reasons to stop here rather than finish the list:
+
+1. **The models available on this node cannot discriminate.** The evaluation harness
+   measured `qwen2.5:1.5b` at 0.00 detection (silent on a 6-sigma spike) and
+   `gemma3:1b` at 0.00 restraint (flagging deliberately steady readings). Wiring
+   either to an actuator would act on judgement already measured as unreliable.
+2. **The phase's own gate requires a human.** "Manual kill switch tested first" is
+   not something to self-certify, and a week of `dry_run` logs has to actually be
+   inspected by someone before the envelope's bounds can be trusted.
+
+What exists is the lock, not the key: `ActionEnvelope` defaults to `enabled=False`
+and `dry_run=True`, and no actuator is connected to `propose_action`. This matters
+because `agent.py` already auto-registers every WritePlugin's tools, so enabling an
+actuator alongside `observation_use_tools: true` is all it would take.
 
 ### What building phases 1–2 changed about this design
 
@@ -314,6 +336,22 @@ Four things the plan got wrong, corrected by failing tests rather than by review
 - **Auto-promote needs a fire-rate check.** Without one, a proposed rule that fires
   constantly is promoted and then muted in the same pass — two state changes for
   one decision, inflating the very churn metric meant to detect instability.
+
+From phases 3–6:
+
+- **A rate computed from no labels is not zero.** `feedback_summary()` returns
+  `keep_rate: None` when a source has never been rated, because a fabricated 0.0
+  reads downstream as "nobody finds this useful" rather than "we don't know".
+- **Guards must re-read state, not trust what they were handed.** The retire guard
+  originally checked `fired_count` on the candidate object passed into review, which
+  could be stale — a rule that had fired since nomination would have been retired on
+  a zero. It now re-reads from the store.
+- **SQLite connections need `check_same_thread=False` here.** The dashboard reads
+  these stores from FastAPI's thread pool while the agent writes from the event loop.
+  Only surfaced by actually loading the page.
+- **`request.form()` pulls in python-multipart.** Dashboard verbs therefore live in
+  the URL path (`/api/rules/{id}/promote`) rather than a form field, which avoids the
+  dependency and is better REST anyway.
 
 Also confirmed: `known_sources` is bounded by `readings_log` retention
 (`readings_max_age_days`, 7 days), so a producer dead longer than that is pruned

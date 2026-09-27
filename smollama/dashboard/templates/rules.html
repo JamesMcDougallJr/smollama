@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Rules{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div>
+        <h1 class="text-3xl font-bold text-slate-900">Rules</h1>
+        <p class="mt-1 text-slate-500">
+            Deterministic predicates over detector signals. Thresholds are fitted from
+            each source's own history, never chosen by hand or by a model.
+        </p>
+    </div>
+
+    {% if not rules_available %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-6">
+        <h2 class="font-semibold text-amber-900">Rule store not connected</h2>
+        <p class="mt-1 text-sm text-amber-800">
+            The dashboard was started without a rule store. Rules live in
+            <code>memory.db</code>; restart the dashboard once the agent has created them.
+        </p>
+    </div>
+    {% else %}
+
+    <!-- Live detector signals -->
+    <section class="space-y-3">
+        <div class="flex items-baseline justify-between">
+            <h2 class="text-xl font-semibold text-slate-900">Uncovered signals</h2>
+            <span class="text-sm text-slate-500">
+                {{ signals|length }} with no active rule watching them
+            </span>
+        </div>
+        {% if signals %}
+        <div class="space-y-2">
+            {% for s in signals %}
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+                <div class="flex items-center gap-3 text-sm">
+                    <span class="rounded bg-slate-100 px-2 py-0.5 font-mono text-xs text-slate-700">
+                        {{ s.detector }}
+                    </span>
+                    <span class="font-medium text-slate-900">{{ s.source }}</span>
+                    <span class="text-slate-400">{{ s.direction }}</span>
+                    <span class="ml-auto font-mono text-xs text-slate-500">score {{ "%.2f"|format(s.score) }}</span>
+                </div>
+                <p class="mt-2 text-sm text-slate-600">{{ s.detail }}</p>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-sm text-slate-500">
+            Nothing uncovered &mdash; either quiet, or already watched by an active rule.
+        </p>
+        {% endif %}
+    </section>
+
+    <!-- Rules by state -->
+    {% for state, group in grouped.items() %}
+    {% if group %}
+    <section class="space-y-3">
+        <div class="flex items-baseline justify-between">
+            <h2 class="text-xl font-semibold text-slate-900">{{ state | capitalize }}</h2>
+            <span class="text-sm text-slate-500">{{ group|length }}</span>
+        </div>
+        {% if state == 'proposed' %}
+        <p class="text-sm text-slate-500">
+            Proposed rules cover nothing and monitor nothing. Promote one to put it in
+            service, or leave it &mdash; it will auto-promote after enough clean
+            evaluations.
+        </p>
+        {% endif %}
+
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table class="min-w-full divide-y divide-slate-200 text-sm">
+                <thead class="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                        <th class="px-4 py-3">Watches</th>
+                        <th class="px-4 py-3">Threshold</th>
+                        <th class="px-4 py-3">Fired</th>
+                        <th class="px-4 py-3">Age</th>
+                        <th class="px-4 py-3">Reason</th>
+                        <th class="px-4 py-3">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for r in group %}
+                    <tr>
+                        <td class="px-4 py-3">
+                            <div class="font-medium text-slate-900">{{ r.full_id }}</div>
+                            <div class="text-xs text-slate-500">
+                                {{ r.detector }} &middot; {{ r.direction }}
+                            </div>
+                            {% if r.rationale %}
+                            <div class="mt-1 text-xs italic text-slate-400">{{ r.rationale }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 font-mono text-xs text-slate-600">
+                            {% if r.threshold_spec %}
+                                {{ r.threshold_spec }}
+                                {% if r.threshold_value is not none %}
+                                <div class="text-slate-400">= {{ "%g"|format(r.threshold_value) }}</div>
+                                {% endif %}
+                                {% if r.threshold_fitted_at %}
+                                <div class="text-slate-400">fitted {{ r.threshold_fitted_at[:16] }}</div>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-slate-400">structural</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="text-slate-900">{{ r.fired_count }} / {{ r.evaluations }}</div>
+                            <div class="text-xs {% if r.fire_rate > 0.5 %}text-amber-600{% else %}text-slate-500{% endif %}">
+                                {{ "%.0f"|format(r.fire_rate * 100) }}%
+                            </div>
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-500">
+                            {{ "%.0f"|format(r.age_days()) }}d
+                        </td>
+                        <td class="px-4 py-3 text-xs text-slate-500">
+                            {{ r.state_reason or '—' }}
+                        </td>
+                        <td class="px-4 py-3">
+                            <div class="flex gap-1">
+                                {% if r.state != 'active' %}
+                                <form method="post" action="/api/rules/{{ r.id }}/promote">
+                                    <button class="rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white hover:bg-slate-700">
+                                        {% if r.state == 'proposed' %}Promote{% else %}Reactivate{% endif %}
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if r.state == 'active' %}
+                                <form method="post" action="/api/rules/{{ r.id }}/mute">
+                                    <button class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50">
+                                        Mute
+                                    </button>
+                                </form>
+                                {% endif %}
+                                {% if r.state != 'retired' %}
+                                <form method="post" action="/api/rules/{{ r.id }}/retire">
+                                    <button class="rounded border border-slate-300 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">
+                                        Retire
+                                    </button>
+                                </form>
+                                {% endif %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+    {% endfor %}
+
+    {% if not any_rules %}
+    <div class="rounded-xl border border-slate-200 bg-white p-6">
+        <p class="text-slate-600">No rules yet.</p>
+        <p class="mt-1 text-sm text-slate-500">
+            Rules are created from uncovered signals. Retired rules are kept rather than
+            deleted &mdash; a wrongly retired rule creates silence nobody notices.
+        </p>
+    </div>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

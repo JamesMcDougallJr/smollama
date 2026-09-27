@@ -110,7 +110,10 @@ class RuleStore:
     def connect(self) -> sqlite3.Connection:
         if self._conn is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = sqlite3.connect(str(self.db_path))
+            # check_same_thread=False because the dashboard reads rules from FastAPI's thread pool while the agent writes them from the event loop.
+            # Matches LocalStore, which has always done this; WAL mode keeps
+            # readers and writers from blocking each other.
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._conn.executescript(SCHEMA)
             self._conn.commit()

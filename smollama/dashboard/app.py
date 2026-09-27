@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -78,6 +83,7 @@ def create_app(
     discovery_manager: Any = None,
     observers: list | None = None,
     frames: Any = None,
+    rules: Any = None,
 ) -> FastAPI:
     """Create the FastAPI dashboard application.
 
@@ -163,9 +169,101 @@ def create_app(
         }
 
         if store:
-            context["observations"] = store.search_observations("", limit=50, from_ts=from_ts)
+            observations = store.search_observations("", limit=50, from_ts=from_ts)
+            # Attach any human verdict so the keep/dismiss control reflects state
+            # rather than always rendering as unrated.
+            for obs in observations:
+                obs["verdict"] = store.get_feedback(obs["id"])
+            context["observations"] = observations
 
         return templates.TemplateResponse(request, "observations.html", context)
+
+    @app.get("/rules", response_class=HTMLResponse)
+    async def rules_page(request: Request):
+        """Rule browser: live uncovered signals plus rules grouped by state.
+
+        Proposed rules need a human decision, so this page is the approval surface
+        that keeps an automatically-authored rule from becoming load-bearing.
+        """
+        context = {
+            "node_name": config.node.name,
+            "page": "rules",
+            "rules_available": rules is not None,
+            "signals": [],
+            "grouped": {},
+            "any_rules": False,
+        }
+
+        if rules is not None:
+            from ..detectors import DetectorConfig, detect_all
+            from ..detectors.source import load_series
+            from ..rules import uncovered_signals
+
+            all_rules = rules.all_rules()
+            context["any_rules"] = bool(all_rules)
+            # Ordered so the states needing attention come first.
+            context["grouped"] = {
+                state: [r for r in all_rules if r.state == state]
+                for state in ("proposed", "active", "muted", "parked", "retired")
+            }
+
+            try:
+                series = load_series(config.memory.db_path)
+                signals = detect_all(series, config=DetectorConfig())
+                context["signals"] = uncovered_signals(signals, rules)
+            except Exception as e:
+                logger.warning("could not compute signals for rules page: %s", e)
+
+        return templates.TemplateResponse(request, "rules.html", context)
+
+    @app.post("/api/rules/{rule_id}/{action}")
+    async def api_rule_action(rule_id: int, action: str):
+        """Promote, mute, or retire a rule from the dashboard.
+
+        The verb is in the path rather than a form field so no request-body parsing
+        is needed — `request.form()` requires python-multipart, which is not a
+        dependency of the dashboard extra.
+
+        Mute and retire require a reason in the store, so these supply one naming the
+        operator: the reason log is the only audit trail for why a rule stopped
+        monitoring.
+        """
+        if rules is None:
+            raise HTTPException(status_code=503, detail="rule store not connected")
+        if rules.get(rule_id) is None:
+            raise HTTPException(status_code=404, detail=f"no rule {rule_id}")
+
+        if action == "promote":
+            rules.promote(rule_id, "promoted from dashboard")
+        elif action == "mute":
+            rules.mute(rule_id, "muted from dashboard")
+        elif action == "retire":
+            rules.retire(rule_id, "retired from dashboard")
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
+
+        return RedirectResponse("/rules", status_code=303)
+
+    @app.post("/api/observations/{observation_id}/feedback/{verdict}")
+    async def api_observation_feedback(observation_id: int, verdict: str, request: Request):
+        """Record a keep/dismiss verdict on an observation.
+
+        This is the only ground truth the system has about whether an observation was
+        worth surfacing. Without it, any automated judgement about rule quality is
+        optimising a proxy.
+
+        Verdict is in the path for the same reason as the rule actions above: no
+        body parsing, so no python-multipart dependency.
+        """
+        if store is None:
+            raise HTTPException(status_code=503, detail="store not connected")
+        try:
+            store.record_feedback(observation_id, verdict)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return RedirectResponse(
+            request.headers.get("referer", "/observations"), status_code=303
+        )
 
     @app.get("/memories", response_class=HTMLResponse)
     async def memories_page(request: Request):

@@ -61,6 +61,17 @@ CREATE TABLE IF NOT EXISTS memories (
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_active ON memories(active);
+
+-- Human verdicts on observations. The only ground truth in the system: nothing
+-- else records whether an observation was worth surfacing, so automated judgement
+-- about rule quality is otherwise optimising a proxy. One row per observation,
+-- replaceable, because a misclick must be correctable.
+CREATE TABLE IF NOT EXISTS observation_feedback (
+    observation_id INTEGER PRIMARY KEY,
+    verdict        TEXT NOT NULL CHECK (verdict IN ('keep', 'dismiss')),
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
 """
 
 # Vector table schema (sqlite-vec specific)
@@ -883,6 +894,86 @@ class LocalStore:
             logger.info(f"Cleaned up {deleted} readings older than {days} days")
 
         return deleted
+
+    # ==================== Observation feedback ====================
+    # Phase 3 of docs/observation-rules.md. These verdicts are the only ground
+    # truth available about whether an observation was worth surfacing, which is
+    # what lets rule review be evidential instead of speculative.
+
+    VERDICTS = ("keep", "dismiss")
+
+    def record_feedback(self, observation_id: int, verdict: str) -> None:
+        """Record a human verdict on one observation. Replaces any prior verdict."""
+        if verdict not in self.VERDICTS:
+            raise ValueError(
+                f"verdict must be one of {self.VERDICTS}, got {verdict!r}"
+            )
+        conn = self._ensure_connected()
+        now = datetime.now().isoformat()
+        conn.execute(
+            "INSERT INTO observation_feedback "
+            "(observation_id, verdict, created_at, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(observation_id) DO UPDATE SET "
+            "verdict = excluded.verdict, updated_at = excluded.updated_at",
+            (observation_id, verdict, now, now),
+        )
+        conn.commit()
+
+    def get_feedback(self, observation_id: int) -> str | None:
+        row = self._ensure_connected().execute(
+            "SELECT verdict FROM observation_feedback WHERE observation_id = ?",
+            (observation_id,),
+        ).fetchone()
+        return row["verdict"] if row else None
+
+    def feedback_for_sources(self, sources: list[str]) -> list[dict]:
+        """Verdicts on observations that referenced any of these sources.
+
+        `related_sources` is stored as a JSON array, so matching is a LIKE against
+        the quoted source name — exact enough because source ids are quoted in the
+        JSON and cannot be a substring of another quoted id.
+        """
+        if not sources:
+            return []
+        conn = self._ensure_connected()
+        clauses = " OR ".join(["o.related_sources LIKE ?"] * len(sources))
+        params = [f'%"{s}"%' for s in sources]
+        rows = conn.execute(
+            f"SELECT o.id, o.text, o.observation_type, o.related_sources, "
+            f"f.verdict, f.updated_at FROM observations o "
+            f"JOIN observation_feedback f ON f.observation_id = o.id "
+            f"WHERE {clauses} ORDER BY f.updated_at DESC",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def feedback_summary(self, source: str) -> dict:
+        """Keep/dismiss counts for one source.
+
+        `keep_rate` is None rather than 0.0 when there are no labels — a rate
+        fabricated from no data is exactly the kind of number that later gets
+        treated as evidence.
+        """
+        rows = self.feedback_for_sources([source])
+        total = len(rows)
+        keep = sum(1 for r in rows if r["verdict"] == "keep")
+        return {
+            "source": source,
+            "total": total,
+            "keep": keep,
+            "dismiss": total - keep,
+            "keep_rate": (keep / total) if total else None,
+        }
+
+    def recent_observations_with_feedback(self, limit: int = 50) -> list[dict]:
+        """Recent observations joined to their verdict, for the dashboard."""
+        rows = self._ensure_connected().execute(
+            "SELECT o.*, f.verdict FROM observations o "
+            "LEFT JOIN observation_feedback f ON f.observation_id = o.id "
+            "ORDER BY o.timestamp DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def cleanup_old_observations(self, days: int = 3) -> int:
         """Delete observations older than specified days, preserving summaries.
