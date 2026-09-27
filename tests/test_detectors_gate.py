@@ -230,3 +230,59 @@ class TestGateNoiseFloor:
             pytest.skip("empty readings_log")
         scores = [s.score for s in detect_all(series, now=now, config=DetectorConfig())]
         assert scores == sorted(scores, reverse=True)
+
+
+class TestLoaderScaling:
+    """The loader runs every detection pass, so its query must use an index.
+
+    A full SCAN is 3ms at 5k rows and seconds once the table is large — and it
+    grows every cycle, so the cost is unbounded rather than merely slow.
+    """
+
+    def test_time_bound_is_pushed_into_sql(self):
+        now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+        path = _write_db([
+            ("s", (now - timedelta(hours=i)).isoformat(), float(i)) for i in range(50)
+        ])
+        try:
+            conn = sqlite3.connect(path)
+            conn.execute("CREATE INDEX idx_readings_timestamp ON readings_log(timestamp)")
+            conn.commit()
+            plan = "\n".join(
+                r[-1] for r in conn.execute(
+                    "EXPLAIN QUERY PLAN SELECT full_id, timestamp, value_numeric "
+                    "FROM readings_log WHERE timestamp >= ? AND value_numeric IS NOT NULL",
+                    ("2026-09-26T00:00:00+00:00",),
+                )
+            )
+            conn.close()
+            assert "SCAN" not in plan.upper(), f"full scan not avoided:\n{plan}"
+            assert "INDEX" in plan.upper(), plan
+        finally:
+            os.unlink(path)
+
+    def test_source_filter_still_returns_only_requested_sources(self):
+        now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+        path = _write_db([
+            ("wanted", (now - timedelta(minutes=5)).isoformat(), 1.0),
+            ("other", (now - timedelta(minutes=5)).isoformat(), 2.0),
+        ])
+        try:
+            series = load_series(path, now=now, sources=["wanted"])
+            assert set(series) == {"wanted"}
+        finally:
+            os.unlink(path)
+
+    def test_rows_just_outside_the_window_are_still_excluded(self):
+        """The SQL floor is deliberately widened by a day to tolerate mixed
+        timestamp frames; exact filtering must still happen after normalization."""
+        now = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+        path = _write_db([
+            ("s", (now - timedelta(hours=30)).isoformat(), 1.0),  # outside 24h window
+            ("s", (now - timedelta(hours=1)).isoformat(), 2.0),
+        ])
+        try:
+            series = load_series(path, now=now, window_seconds=86400)
+            assert [s.value for s in series["s"]] == [2.0]
+        finally:
+            os.unlink(path)

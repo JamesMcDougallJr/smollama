@@ -40,33 +40,50 @@ def load_series(
         logger.warning("readings_log not found at %s", path)
         return {}
 
+    cutoff = now - timedelta(seconds=window_seconds)
+    wanted = set(sources) if sources else None
+
+    # The time bound goes in SQL so idx_readings_timestamp is used. Filtering it in
+    # Python instead means SCAN readings_log on every detection pass — 3ms at 5k
+    # rows, seconds once the table is large, and it grows every cycle.
+    #
+    # Two windows are compared because readings_log mixes timestamp frames: local
+    # providers store naive local time, relayed edge readings store tz-aware UTC.
+    # A single ISO bound would silently exclude one frame or the other, so the
+    # query widens by a day and exact filtering happens after normalization.
+    sql_floor = (cutoff - timedelta(days=1)).isoformat()
+
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT full_id, timestamp, value_numeric FROM readings_log "
-            "WHERE value_numeric IS NOT NULL"
-        ).fetchall()
+        if wanted:
+            placeholders = ",".join("?" * len(wanted))
+            rows = conn.execute(
+                "SELECT full_id, timestamp, value_numeric FROM readings_log "
+                f"WHERE timestamp >= ? AND full_id IN ({placeholders}) "
+                "AND value_numeric IS NOT NULL",
+                (sql_floor, *sorted(wanted)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT full_id, timestamp, value_numeric FROM readings_log "
+                "WHERE timestamp >= ? AND value_numeric IS NOT NULL",
+                (sql_floor,),
+            ).fetchall()
     except sqlite3.Error as e:
         logger.warning("could not read readings_log: %s", e)
         return {}
     finally:
         conn.close()
 
-    cutoff = now - timedelta(seconds=window_seconds)
-    wanted = set(sources) if sources else None
     series: dict[str, list[Sample]] = {}
-
     for row in rows:
-        full_id = row["full_id"]
-        if wanted is not None and full_id not in wanted:
-            continue
         # Normalizing here, not at compare time, is what makes the mixed naive /
         # tz-aware storage safe for every downstream elapsed-time calculation.
         ts = normalize_ts(row["timestamp"])
         if ts < cutoff:
             continue
-        series.setdefault(full_id, []).append(
+        series.setdefault(row["full_id"], []).append(
             Sample(ts=ts, value=float(row["value_numeric"]))
         )
 

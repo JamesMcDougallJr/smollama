@@ -109,6 +109,12 @@ class LocalStore:
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
 
+        # WAL so the dashboard process can read while the agent writes. Without it
+        # (the default `delete` journal) readers and writers block each other on the
+        # same file — invisible at 11 sources, lock contention as sources grow.
+        # frames.db has always done this; memory.db was missed.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+
         # Create base schema
         self._conn.executescript(SCHEMA)
         self._conn.commit()
