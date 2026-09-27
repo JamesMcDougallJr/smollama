@@ -3,6 +3,7 @@
 import json
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +174,52 @@ def _ssh_write(user: str, host: str, remote_path: str, content: str, dry_run: bo
     return write_proc.returncode
 
 
+def _neutralize_shadowing_configs(
+    user: str, host: str, remote_dir: str, dry_run: bool
+) -> int:
+    """Rename any repo-local config on the target that would shadow the deploy.
+
+    ``load_config()`` searches the process's cwd first, and the agent runs from
+    ``~/smollama`` — so a ``config.yaml``/``config.local.yaml``/``cluster.yaml``
+    left in the repo there wins outright and ``~/.smollama/config.yaml`` (the
+    file this function's caller just wrote) is never read. rsync deliberately
+    excludes those names, so ``--delete`` can't clear them either: without this
+    step a stale local config silently defeats every future deploy.
+
+    Moves rather than deletes, so the previous content stays recoverable. The
+    destination is under ~/.smollama (outside the rsync tree) — a backup left
+    inside ``remote_dir`` would be erased by the next deploy's ``rsync --delete``.
+    """
+    remote = f"{user}@{host}" if user else host
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_dir = f"~/.smollama/shadowed-configs/{stamp}"
+    # Keep this list in sync with _discover_config_path/_discover_cluster_config_path
+    names = "config.yaml config.yml config.local.yaml cluster.yaml cluster.yml"
+    script = (
+        f'cd {remote_dir} 2>/dev/null || exit 0; '
+        f'for f in {names}; do '
+        f'  if [ -e "$f" ]; then '
+        f'    mkdir -p {backup_dir} && mv "$f" {backup_dir}/ && '
+        f'    echo "    shadowed: {remote_dir}/$f -> {backup_dir}/$f"; fi; '
+        f'done'
+    )
+    if dry_run:
+        print(f"  [dry-run] ssh {remote} '<neutralize repo-local configs in {remote_dir}>'")
+        return 0
+
+    print(f"  check for shadowing configs in {remote}:{remote_dir}")
+    result = subprocess.run(["ssh", remote, script], capture_output=True, text=True)
+    if result.stdout.strip():
+        print(result.stdout.rstrip())
+        print(
+            "    ^ these shadowed ~/.smollama/config.yaml and were renamed; "
+            "the deployed config now governs."
+        )
+    if result.returncode != 0:
+        print(f"  WARNING: shadow check failed: {result.stderr.strip()}", file=sys.stderr)
+    return 0
+
+
 def deploy_node(
     node_key: str,
     cluster_data: dict[str, Any],
@@ -232,6 +279,9 @@ def deploy_node(
     )
     if rc != 0:
         return rc
+
+    # 2b. Make sure nothing in the repo dir shadows what we just wrote
+    _neutralize_shadowing_configs(user, host, remote_dir, dry_run)
 
     # 3. Write writer config if flagged
     if has_writer:
