@@ -3,8 +3,10 @@
 import json
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
+
+from smollama.timeutil import utc_now_epoch
 
 from smollama.readings import (
     Reading,
@@ -350,6 +352,50 @@ class TestMQTTBridgeProvider:
         assert readings[0].source_id == "system:cpu_temp"
         assert readings[0].value == 48.5
 
+    @pytest.mark.asyncio
+    async def test_ingest_epoch_ts(self, tmp_path):
+        """Producers send epoch seconds — the current wire contract."""
+        provider = MQTTBridgeProvider(cache_path=tmp_path / "cache.json")
+        epoch = 1788797761.437644
+
+        provider.ingest_edge_payload(
+            "jetson-nano",
+            [{"source": "system:cpu_temp", "value": 48.5, "unit": "celsius", "ts": epoch}],
+        )
+
+        readings = await provider.read_all()
+        assert readings[0].timestamp == datetime.fromtimestamp(epoch, tz=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_epoch_and_legacy_iso_agree(self, tmp_path):
+        """An un-upgraded edge node still sending ISO must land on the same instant."""
+        epoch = 1788797761.437644
+        iso_pdt = "2026-09-07T09:16:01.437644-07:00"
+
+        a = MQTTBridgeProvider(cache_path=tmp_path / "a.json")
+        a.ingest_edge_payload("n", [{"source": "s", "value": 1, "ts": epoch}])
+        b = MQTTBridgeProvider(cache_path=tmp_path / "b.json")
+        b.ingest_edge_payload("n", [{"source": "s", "value": 1, "ts": iso_pdt}])
+
+        assert (await a.read_all())[0].timestamp == (await b.read_all())[0].timestamp
+
+    @pytest.mark.asyncio
+    async def test_reading_age_correct_across_producer_timezone(self, tmp_path):
+        """A live reading from a differently-offset producer must not look stale.
+
+        This is the failure that made a running node show as offline: the node's
+        local offset landed on the wire and age came out hours wrong.
+        """
+        provider = MQTTBridgeProvider(cache_path=tmp_path / "cache.json")
+        provider.ingest_edge_payload(
+            "jetson-nano",
+            [{"source": "system:cpu_temp", "value": 40.0, "ts": utc_now_epoch()}],
+        )
+
+        reading = (await provider.read_all())[0]
+        age = (datetime.now(timezone.utc) - reading.timestamp).total_seconds()
+        assert 0 <= age < 5
+
     def test_persist_merges_with_existing_cache(self, tmp_path):
         """A second provider instance must not wipe out the first's entries.
 
@@ -378,6 +424,33 @@ class TestMQTTBridgeProvider:
 
         assert "jetson-nano:jetson_inference:object_count" in data
         assert "other-node:system:cpu_temp" in data
+
+    def test_persist_normalizes_merged_legacy_entries(self, tmp_path):
+        """Entries merged from disk must be healed, not carried forward verbatim.
+
+        They belong to nodes this process hasn't heard from, so nothing else
+        rewrites them — a pre-contract offset would otherwise persist forever.
+        """
+        cache_path = tmp_path / "cache.json"
+        cache_path.write_text(json.dumps({
+            "old-node:system:cpu_temp": {
+                "node": "old-node",
+                "source": "system:cpu_temp",
+                "value": 41.0,
+                "timestamp": "2026-09-07T09:16:01.437644-07:00",
+                "unit": "celsius",
+                "metadata": {"node": "old-node"},
+            }
+        }))
+
+        provider = MQTTBridgeProvider(cache_path=cache_path)
+        provider.ingest_edge_payload("new-node", [{"source": "s", "value": 1, "ts": utc_now_epoch()}])
+
+        data = json.loads(cache_path.read_text())
+        # Untouched node's entry is retained (merge semantics) but normalized
+        assert data["old-node:system:cpu_temp"]["value"] == 41.0
+        assert data["old-node:system:cpu_temp"]["timestamp"] == "2026-09-07T16:16:01.437644+00:00"
+        assert {v["timestamp"][-6:] for v in data.values()} == {"+00:00"}
 
     @pytest.mark.asyncio
     async def test_load_from_file_round_trip(self, tmp_path):

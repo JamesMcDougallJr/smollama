@@ -131,21 +131,31 @@ Categories are natural-language prompts, not a trained model — see
 re-embeds and hot-reloads it on the next scored frame, no restart, and no
 change ever needs to reach the edge fleet.
 
-**Wire contract v2:** `clip_frames.py` can additionally emit overlapping
+**Wire contract v3:** `clip_frames.py` can additionally emit overlapping
 temporal windows (mean-pooled, renormalized embedding over ~4s of sampled
 frames) alongside its existing change-gated keyframes. Both shapes flow
 through the same spool/MQTT topic; a `kind` field (`"keyframe"` or `"window"`)
-and `schema_version: 2` distinguish them. A payload with no `kind` is treated
-as a keyframe (v1 compatibility), and a v2 edge talking to an unupgraded
+and `schema_version: 3` distinguish them. A payload with no `kind` is treated
+as a keyframe (v1 compatibility), and a newer edge talking to an unupgraded
 master ingests windows as keyframes — degraded (no scoring) but harmless.
 Window payloads add one field:
 
 ```json
 "window": {
-  "start": "<ISO>", "end": "<ISO>",
+  "start": 1790431438.9, "end": 1790431442.9,
   "samples": 4, "person_max": 2, "person_mean": 1.5, "actionness": 1.5
 }
 ```
+
+**All times on the wire are epoch seconds (UTC).** v3 changed `ts` and the
+window bounds from tz-aware ISO strings to plain floats: a producer's local UTC
+offset is a property of that machine, not of the frame, and putting it on the
+wire forced every consumer to be offset-aware. It also broke the master's range
+and retention queries, which compare timestamps as SQLite TEXT — lexical order
+only matches chronological order when all rows share one offset. The master now
+normalizes on ingest to a single canonical UTC form (`smollama/timeutil.py`).
+Legacy ISO values are still accepted, so upgrading does not require draining a
+spool first.
 
 Enable windows by passing `windows_enabled=True` (plus `window_seconds`,
 `window_step_seconds`, etc.) to `FrameEmbedder` in `jetson_infer.py`, and set

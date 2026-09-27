@@ -18,6 +18,7 @@ from .ollama_client import (
     format_assistant_tool_calls,
 )
 from .plugins.loader import PluginLoader
+from .timeutil import to_epoch
 from .readings import GPIOReadingProvider, MQTTBridgeProvider, ReadingManager, SystemReadingProvider
 from .tools import ToolRegistry, PublishTool, GetRecentMessagesTool
 from .tools.reading_tools import GetReadingHistoryTool, ListSourcesTool, ReadSourceTool
@@ -363,13 +364,12 @@ class Agent:
                                     "source": r.full_id,
                                     "value": r.value,
                                     "unit": r.unit,
-                                    # Emit a timezone-aware timestamp (attach this
-                                    # node's local offset) so the master computes
-                                    # reading age correctly even when nodes are in
-                                    # different timezones. A naive timestamp here
-                                    # makes cross-timezone readings look hours stale
-                                    # and the node show "offline" while it is live.
-                                    "ts": r.timestamp.astimezone().isoformat(),
+                                    # Wire contract: epoch seconds, UTC. The
+                                    # producer's local offset is a property of
+                                    # this machine, not of the reading, so it
+                                    # never goes on the wire — the master
+                                    # normalizes (see smollama/timeutil.py).
+                                    "ts": to_epoch(r.timestamp),
                                     # Metadata (e.g. detected-object lists) is opt-in:
                                     # it can be large, and most deployments don't
                                     # consume it on the master.

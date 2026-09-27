@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from smollama.frames import FrameSpool, FrameStore
+from smollama.timeutil import to_utc_iso, utc_now_epoch
 
 # Tiny valid JPEG (1x1 px) for thumbnail round-trip tests
 JPEG_1PX = base64.b64decode(
@@ -238,6 +239,99 @@ class TestWindows:
         assert frame["window_end"] == payload["frame"]["window"]["end"]
         assert frame["meta"]["samples"] == 4
         assert frame["meta"]["person_max"] == 2
+
+    def test_ingest_epoch_ts_v3(self, store):
+        """v3 writers send epoch seconds for ts and both window bounds."""
+        end = utc_now_epoch()
+        start = end - 4.0
+        payload = {
+            "frame": {
+                "schema_version": 3,
+                "kind": "window",
+                "ts": end,
+                "embedding": one_hot(0),
+                "window": {"start": start, "end": end, "samples": 4},
+            },
+        }
+        frame_id = store.ingest_payload("jetson1", payload)
+        assert frame_id is not None
+
+        frame = store.get_frame(frame_id)
+        assert frame["timestamp"] == to_utc_iso(end)
+        assert frame["window_start"] == to_utc_iso(start)
+        assert frame["window_end"] == to_utc_iso(end)
+
+    def test_epoch_and_legacy_iso_store_identically(self, store):
+        """A v2 entry already sitting in a spool must ingest to the same instant."""
+        epoch = 1788797761.437644
+        iso = "2026-09-07T09:16:01.437644-07:00"  # same instant, PDT producer
+
+        a = store.add_frame("n", epoch, one_hot(0))
+        b = store.add_frame("n", iso, one_hot(1))
+        assert store.get_frame(a)["timestamp"] == store.get_frame(b)["timestamp"]
+
+    def test_range_query_finds_frames_from_offset_producers(self, store):
+        """Range queries compare timestamps as TEXT, so offsets must be normalized.
+
+        Stored raw, "2026-09-07T09:16:01-07:00" (= 16:16:01Z) sorts lexically
+        *below* a "…T16:00:00+00:00" lower bound and the frame vanishes from the
+        range despite being inside it. Normalizing to UTC on ingest fixes it.
+        """
+        store.add_frame("pdt-node", "2026-09-07T09:16:01-07:00", one_hot(0), kind="window")
+        store.add_frame("cest-node", "2026-09-07T18:20:00+02:00", one_hot(1), kind="window")
+
+        found = store.get_frames_in_range(
+            "2026-09-07T16:00:00+00:00", "2026-09-07T17:00:00+00:00", kind="window"
+        )
+        assert {f["node_id"] for f in found} == {"pdt-node", "cest-node"}
+        # ORDER BY timestamp must also be chronological: 16:16:01Z before 16:20:00Z
+        assert [f["node_id"] for f in found] == ["pdt-node", "cest-node"]
+
+    def test_migration_normalizes_legacy_offsets(self, tmp_path):
+        """Rows stamped with a producer's local offset are rewritten to UTC.
+
+        Those rows compare wrong against UTC bounds in the TEXT range queries,
+        so they stay invisible until normalized.
+        """
+        import sqlite3
+
+        db = tmp_path / "frames.db"
+        store = FrameStore(db_path=str(db), thumbnail_dir=str(tmp_path / "thumbs"))
+        store.add_frame("n", "2026-09-07T16:16:01+00:00", one_hot(0), kind="window")
+        store.close()
+
+        # Simulate pre-contract rows written with the writer's -07:00 offset
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "UPDATE frames SET timestamp = ?, window_start = ?, window_end = ?",
+            ("2026-09-07T09:16:01-07:00", "2026-09-07T09:15:57-07:00",
+             "2026-09-07T09:16:01-07:00"),
+        )
+        conn.commit()
+        conn.close()
+
+        # Reopening runs _migrate -> _normalize_legacy_timestamps
+        store2 = FrameStore(db_path=str(db), thumbnail_dir=str(tmp_path / "thumbs"))
+        store2._ensure_connected()
+
+        conn = sqlite3.connect(db)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT timestamp, window_start, window_end FROM frames"
+        ).fetchone()
+        assert row["timestamp"] == "2026-09-07T16:16:01+00:00"
+        assert row["window_end"] == "2026-09-07T16:16:01+00:00"
+        assert row["window_start"] == "2026-09-07T16:15:57+00:00"
+        conn.close()
+
+        # Idempotent: a second open must not rewrite or corrupt anything
+        store3 = FrameStore(db_path=str(db), thumbnail_dir=str(tmp_path / "thumbs"))
+        store3._ensure_connected()
+        conn = sqlite3.connect(db)
+        assert conn.execute(
+            "SELECT timestamp FROM frames"
+        ).fetchone()[0] == "2026-09-07T16:16:01+00:00"
+        conn.close()
 
     def test_migration_adds_columns_to_old_schema(self, tmp_path):
         import sqlite3

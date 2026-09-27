@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ..timeutil import to_utc_iso
 from .text_encoder import ClipTextEncoder
 
 logger = logging.getLogger(__name__)
@@ -146,6 +147,48 @@ class FrameStore:
             "ON frames(kind, activity_category, activity_score)"
         )
         self._conn.commit()
+        self._normalize_legacy_timestamps()
+
+    def _normalize_legacy_timestamps(self) -> None:
+        """Rewrite rows stamped with a producer's local UTC offset to canonical UTC.
+
+        Frames ingested before the epoch wire contract kept whatever offset the
+        writer's machine happened to use (e.g. "…T08:47:52-07:00"). Because these
+        columns are TEXT and the range/retention queries compare them as strings,
+        a row with a non-UTC offset can sort outside a window it actually falls
+        inside — so those rows are effectively invisible until rewritten.
+
+        Idempotent: rows already in canonical form contain "+00:00" and are
+        skipped by the WHERE clause, so this is a no-op on every later startup.
+        """
+        try:
+            rows = self._conn.execute(
+                "SELECT id, timestamp, window_start, window_end FROM frames "
+                "WHERE timestamp NOT LIKE '%+00:00'"
+            ).fetchall()
+        except sqlite3.Error as e:
+            logger.warning(f"Could not scan for legacy timestamps: {e}")
+            return
+
+        if not rows:
+            return
+
+        for row in rows:
+            self._conn.execute(
+                "UPDATE frames SET timestamp = ?, window_start = ?, window_end = ? "
+                "WHERE id = ?",
+                (
+                    to_utc_iso(row["timestamp"]),
+                    to_utc_iso(row["window_start"]) if row["window_start"] else None,
+                    to_utc_iso(row["window_end"]) if row["window_end"] else None,
+                    row["id"],
+                ),
+            )
+        self._conn.commit()
+        logger.info(
+            f"Normalized {len(rows)} frame timestamp(s) to canonical UTC "
+            "(legacy producer-local offsets)"
+        )
 
     def _load_vec_extension(self) -> None:
         try:
@@ -197,8 +240,12 @@ class FrameStore:
         """Store one relayed MQTT frame payload; returns the frame id or None."""
         frame = data.get("frame", data)
         embedding = frame.get("embedding")
+        # Writers send epoch seconds (UTC); add_frame normalizes to the canonical
+        # storage form. Mixed local offsets used to break the retention/window
+        # queries, which compare timestamps lexically as TEXT — see
+        # smollama/timeutil.py.
         ts = frame.get("ts")
-        if not isinstance(embedding, list) or not ts:
+        if not isinstance(embedding, list) or ts is None:
             logger.warning(f"Ignoring malformed frame payload from {node_id}")
             return None
 
@@ -227,19 +274,29 @@ class FrameStore:
     def add_frame(
         self,
         node_id: str,
-        timestamp: str,
+        timestamp: str | int | float,
         embedding: list[float],
         thumb_jpeg: bytes | None = None,
         labels: list[str] | None = None,
         trigger: str | None = None,
         model: str | None = None,
         kind: str = "keyframe",
-        window_start: str | None = None,
-        window_end: str | None = None,
+        window_start: str | int | float | None = None,
+        window_end: str | int | float | None = None,
         meta: dict | None = None,
     ) -> int | None:
-        """Store a frame (row + vector + thumbnail). Returns frame id or None."""
+        """Store a frame (row + vector + thumbnail). Returns frame id or None.
+
+        ``timestamp`` and the window bounds accept epoch seconds (the producer
+        contract) or an ISO string; all are stored as canonical UTC ISO so the
+        TEXT comparisons in the retention and window queries sort correctly.
+        """
         conn = self._ensure_connected()
+        timestamp = to_utc_iso(timestamp)
+        if window_start is not None:
+            window_start = to_utc_iso(window_start)
+        if window_end is not None:
+            window_end = to_utc_iso(window_end)
 
         # First frame fixes the index dimension; later mismatches are rejected
         if self._dimension is None:

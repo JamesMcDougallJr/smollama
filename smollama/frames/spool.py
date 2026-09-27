@@ -8,22 +8,28 @@ MQTT, and deletes them only after a successful publish — so frames survive
 master/broker outages. The spool is capped: oldest entries are dropped first
 when the cap is exceeded, bounding SD-card use during long partitions.
 
-The JSON entry contract (produced by scripts/jetson/clip_frames.py), v2:
+The JSON entry contract (produced by scripts/jetson/clip_frames.py), v3:
 
     {
-      "schema_version": 2,                  # absent => v1, treated as a keyframe
+      "schema_version": 3,                  # absent => v1, treated as a keyframe
       "kind": "keyframe" | "window",         # absent => "keyframe"
-      "ts": "2026-07-18T12:00:00-07:00",    # tz-aware ISO; window => window end
+      "ts": 1790431442.9,                    # epoch seconds UTC; window => end
       "trigger": "change" | "heartbeat" | "window",
       "model": "mobileclip_s0",
       "dim": 512,
       "embedding": [0.01, ...],              # L2-normalized floats
       "labels": ["person", "dog"],           # detectNet classes in frame/window
       "window": {                            # window-only
-        "start": "<ISO>", "end": "<ISO>",
+        "start": 1790431438.9, "end": 1790431442.9,   # epoch seconds UTC
         "samples": 4, "person_max": 2, "person_mean": 1.5, "actionness": 1.5
       }
     }
+
+v3 changed ``ts`` (and the window bounds) from a tz-aware ISO string to epoch
+seconds — producers no longer put their local UTC offset on the wire, and the
+master normalizes on ingest (see smollama/timeutil.py). v2 entries already in a
+spool still relay: the master accepts either form, so an upgrade doesn't need
+the spool drained first.
 
 pop_batch() only validates ``embedding`` + ``ts``; every other key (including
 ``kind``/``window``) passes through untouched, so v1 and v2 entries share the

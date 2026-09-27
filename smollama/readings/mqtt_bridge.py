@@ -1,9 +1,10 @@
 """MQTT edge-node bridge: caches incoming edge readings as a ReadingProvider."""
 
 import json
-from datetime import datetime
+import os
 from pathlib import Path
 
+from ..timeutil import normalize_ts, to_utc_iso
 from .base import Reading, ReadingProvider
 
 _DEFAULT_CACHE_PATH = Path.home() / ".smollama" / "mqtt_bridge_cache.json"
@@ -13,9 +14,14 @@ class MQTTBridgeProvider(ReadingProvider):
     """ReadingProvider that caches readings received from MQTT edge-node payloads.
 
     Edge nodes publish JSON in the form:
-        {"node": "edge-01", "timestamp": 1234, "readings": [
-            {"source": "system:cpu_temp", "value": 45.3, "unit": "celsius", "ts": "..."}
+        {"node": "edge-01", "timestamp": 1790431442.9, "readings": [
+            {"source": "system:cpu_temp", "value": 45.3, "unit": "celsius",
+             "ts": 1790431442.9}
         ]}
+
+    Both ``timestamp`` and each reading's ``ts`` are epoch seconds (UTC) — see
+    smollama/timeutil.py for why producers never send ISO strings. Legacy ISO
+    values are still accepted on ingest so a stale edge node keeps working.
 
     Each Reading uses the node name as source_type and the original source as
     source_id, so full_id looks like "jeston-nano:system:cpu_temp" rather than
@@ -37,11 +43,10 @@ class MQTTBridgeProvider(ReadingProvider):
         for item in raw_readings:
             source = item.get("source", "unknown")
             cache_key = f"{node}:{source}"
-            ts_raw = item.get("ts")
-            try:
-                ts = datetime.fromisoformat(ts_raw) if ts_raw else datetime.now()
-            except (ValueError, TypeError):
-                ts = datetime.now()
+            # Producers send epoch seconds; normalize_ts also accepts the legacy
+            # ISO form so in-flight messages from an un-upgraded edge node still
+            # land correctly. Result is always tz-aware UTC.
+            ts = normalize_ts(item.get("ts"))
             metadata = {"node": node}
             if isinstance(item.get("metadata"), dict):
                 metadata.update(item["metadata"])
@@ -68,6 +73,12 @@ class MQTTBridgeProvider(ReadingProvider):
                 data = json.loads(self._cache_path.read_text())
             except json.JSONDecodeError:
                 data = {}
+        # Entries merged in from disk belong to nodes this process hasn't heard
+        # from, so nothing above rewrites them. Normalize their timestamps here
+        # or a pre-contract entry keeps its producer-local offset forever.
+        for entry in data.values():
+            if isinstance(entry, dict) and "timestamp" in entry:
+                entry["timestamp"] = to_utc_iso(entry["timestamp"])
         for sid, r in self._cache.items():
             data[sid] = {
                 "node": r.source_type,
@@ -78,9 +89,11 @@ class MQTTBridgeProvider(ReadingProvider):
                 "metadata": r.metadata,
             }
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._cache_path.with_suffix(".tmp")
+        tmp = self._cache_path.with_name(
+            f"{self._cache_path.stem}.{os.getpid()}.tmp"
+        )
         tmp.write_text(json.dumps(data))
-        tmp.rename(self._cache_path)
+        tmp.replace(self._cache_path)
 
     def _load_from_file(self) -> list[Reading]:
         """Read cached readings from disk (used by dashboard process)."""
@@ -90,10 +103,7 @@ class MQTTBridgeProvider(ReadingProvider):
             data = json.loads(self._cache_path.read_text())
             readings = []
             for item in data.values():
-                try:
-                    ts = datetime.fromisoformat(item["timestamp"])
-                except (ValueError, KeyError):
-                    ts = datetime.now()
+                ts = normalize_ts(item.get("timestamp"))
                 metadata = item.get("metadata") or {"node": item["node"]}
                 readings.append(Reading(
                     source_type=item["node"],

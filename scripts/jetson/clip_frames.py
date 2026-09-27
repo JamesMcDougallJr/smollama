@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
 
 logger = logging.getLogger("clip_frames")
 
@@ -66,7 +65,7 @@ class WindowAggregator(object):
         self.min_samples = min_samples
         self.idle_grace_seconds = idle_grace_seconds
 
-        self._samples = []  # dicts: ts, ts_iso, embedding, person_count, labels, jpeg
+        self._samples = []  # dicts: ts (epoch), embedding, person_count, labels, jpeg
         self._last_sample_time = None
         self._last_active_time = None
         self._next_step_time = None
@@ -95,11 +94,10 @@ class WindowAggregator(object):
             return False
         return True
 
-    def add_sample(self, now, ts_iso, embedding, person_count, labels, jpeg_bytes=None):
+    def add_sample(self, now, embedding, person_count, labels, jpeg_bytes=None):
         vec = self._np.asarray(embedding, dtype=self._np.float32)
         self._samples.append({
             "ts": now,
-            "ts_iso": ts_iso,
             "embedding": vec,
             "person_count": person_count or 0,
             "labels": list(labels or []),
@@ -148,8 +146,6 @@ class WindowAggregator(object):
             "embedding": [float(x) for x in mean],
             "start_ts": start,
             "end_ts": end,
-            "start_iso": _iso(start),
-            "end_iso": _iso(end),
             "samples": len(samples),
             "person_max": max(person_counts),
             "person_mean": sum(person_counts) / float(len(person_counts)),
@@ -157,9 +153,6 @@ class WindowAggregator(object):
             "jpeg": mid_sample["jpeg"],
         }
 
-
-def _iso(ts):
-    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().isoformat()
 
 
 class FrameEmbedder(object):
@@ -319,8 +312,7 @@ class FrameEmbedder(object):
 
         if take_sample:
             jpeg_bytes = self._encode_thumb_bytes(rgb_image)
-            ts_iso = datetime.now(timezone.utc).astimezone().isoformat()
-            self._windows.add_sample(now, ts_iso, sample_embedding, person_count, labels, jpeg_bytes)
+            self._windows.add_sample(now, sample_embedding, person_count, labels, jpeg_bytes)
 
         for window in self._windows.pop_ready(now):
             self._write_window_entry(window)
@@ -383,9 +375,11 @@ class FrameEmbedder(object):
             f.write(self._encode_thumb_bytes(rgb_image))
 
         entry = {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "keyframe",
-            "ts": datetime.now(timezone.utc).astimezone().isoformat(),
+            # Epoch seconds (UTC) — the master normalizes. Never an ISO string:
+            # this node's local offset is not a property of the frame.
+            "ts": ts_ms / 1000.0,
             "trigger": trigger,
             "model": self.meta.get("model"),
             "dim": len(embedding),
@@ -409,17 +403,18 @@ class FrameEmbedder(object):
                 f.write(window["jpeg"])
 
         entry = {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "window",
-            "ts": window["end_iso"],
+            # Epoch seconds (UTC), window end — see _write_spool_entry
+            "ts": window["end_ts"],
             "trigger": "window",
             "model": self.meta.get("model"),
             "dim": len(window["embedding"]),
             "embedding": window["embedding"],
             "labels": window["labels"],
             "window": {
-                "start": window["start_iso"],
-                "end": window["end_iso"],
+                "start": window["start_ts"],
+                "end": window["end_ts"],
                 "samples": window["samples"],
                 "person_max": window["person_max"],
                 "person_mean": window["person_mean"],
