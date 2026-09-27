@@ -12,7 +12,7 @@ vector_store:
 llm:
   provider: ollama
   config:
-    model: gemma4:e2b
+    model: qwen2.5:1.5b
     # host.docker.internal resolves to the host machine
     base_url: http://host.docker.internal:11434
 

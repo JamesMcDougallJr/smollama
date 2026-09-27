@@ -4,7 +4,7 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "gemma4:e2b"
+  model: "qwen2.5:1.5b"
   keep_alive: "-1"  # keep model in memory indefinitely; use "30m", "1h", or "0" to unload
 
 mqtt:

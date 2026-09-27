@@ -38,7 +38,7 @@ nodes:
       mode: full               # full = LLM + observations + dashboard
 
     ollama:
-      model: gemma4:e2b        # must match `ollama list` on this node
+      model: qwen2.5:1.5b      # must match `ollama list` on this node
       host: localhost
 
     frames:
@@ -116,7 +116,7 @@ nodes:
   #
   #   ollama:
   #     host: remote-machine    # or localhost if Orin Nano has enough VRAM
-  #     model: gemma4:e2b
+  #     model: qwen2.5:1.5b
   #
   #   frames:
   #     enabled: true

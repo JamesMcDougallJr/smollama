@@ -4,8 +4,13 @@ node:
 ollama:
   host: "localhost"
   port: 11434
-  model: "gemma4:e2b"
+  # qwen2.5:1.5b replaced gemma4:e2b (5.1B, 7.2 GB): 35s vs 104s per observation
+  # cycle, 1.1 GB vs 3.6 GB resident. Small models only hold their output shape
+  # under a JSON schema — see build_observation_schema in observation_loop.py.
+  model: "qwen2.5:1.5b"
+  # Any NEGATIVE duration = resident forever. Never the bare "-1" (400 error).
   keep_alive: "-1m"
+  think: false
 
 mqtt:
   broker: "localhost"
@@ -103,20 +108,20 @@ memory:
 # Master side: index + dashboard/tool search. Edge camera nodes instead set
 # enabled: true with mode "edge" to relay the writer's spool.
 frames:
-  enabled: false
+  enabled: true
   db_path: "~/.smollama/frames.db"
   thumbnail_dir: "~/.smollama/frames"
   # Exported by scripts/jetson/export_clip.py — both must point at the SAME
   # export the Jetson's image encoder came from, or search silently degrades
-  clip_text_model: ""     # e.g. "~/clip-export/text_encoder.onnx"
-  clip_tokenizer: ""      # e.g. "~/clip-export/bpe_simple_vocab_16e6.txt.gz"
+  clip_text_model: "~/clip-export/text_encoder.onnx"
+  clip_tokenizer: "~/clip-export/bpe_simple_vocab_16e6.txt.gz"
   retention_days: 30
   archive_dir: ""         # e.g. "~/frame-archive" — staged before pruning
   archive_command: ""     # e.g. "rclone move ~/frame-archive remote:frames"
   # Zero-shot activity matcher (master-only): scores window embeddings against
   # a prompt file of text categories. Edit the categories, not the code — see
   # config/activity_prompts.yaml and smollama/frames/activity_matcher.py.
-  activity_prompts: ""     # e.g. "config/activity_prompts.yaml" — "" = matcher off
+  activity_prompts: "config/activity_prompts.yaml"
   activity_default_threshold: 0.22
   activity_score_keyframes: false  # v0: score only temporal windows, not every keyframe
   # Edge-only settings (camera node relaying the writer's spool):

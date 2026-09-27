@@ -576,7 +576,7 @@ install_ollama() {
 }
 
 pull_ollama_model() {
-  local model="${1:-gemma4:e2b}"
+  local model="${1:-qwen2.5:1.5b}"
 
   if ! command -v ollama &> /dev/null; then
     warn "Ollama not installed, skipping model pull"
@@ -902,7 +902,9 @@ main() {
   if [[ "$INSTALL_LLM" == true ]]; then
     install_ollama "$os_type" "$pkg_manager"
     echo
-    pull_ollama_model "gemma4:e2b"
+    # qwen2.5:1.5b (986 MB) replaced gemma4:e2b (7.2 GB): on a Pi 5 the 5B
+    # model forced ~4.9 GB into swap and one observation cycle took 104s vs 35s.
+    pull_ollama_model "qwen2.5:1.5b"
     echo
     pull_ollama_model "all-minilm:l6-v2"
     echo

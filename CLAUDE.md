@@ -21,7 +21,7 @@ Everything is handled by a single install script:
 ./scripts/install.sh
 ```
 
-This auto-detects the platform (Raspberry Pi vs macOS vs other Linux), installs all dependencies (UV, Python packages, Mosquitto, Ollama), pulls the default models (`gemma4:e2b` + `all-minilm:l6-v2` for embeddings), and creates `config.yaml`. On Pi it also installs GPIO system libraries and enables SPI/I2C.
+This auto-detects the platform (Raspberry Pi vs macOS vs other Linux), installs all dependencies (UV, Python packages, Mosquitto, Ollama), pulls the default models (`qwen2.5:1.5b` + `all-minilm:l6-v2` for embeddings), and creates `config.yaml`. On Pi it also installs GPIO system libraries and enables SPI/I2C.
 
 For development installs: `./scripts/install.sh --dev`. For minimal (core only): `./scripts/install.sh --minimal`.
 
@@ -82,7 +82,7 @@ Key sections to check when setting up a new machine:
 
 ```yaml
 ollama:
-  model: "gemma4:e2b"       # must match an installed model from `ollama list`
+  model: "qwen2.5:1.5b"     # must match an installed model from `ollama list`
 
 plugins:
   builtin:

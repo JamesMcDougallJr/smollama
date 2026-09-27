@@ -50,7 +50,7 @@ The install script will:
 - Install UV (fast package manager)
 - Install smollama and all dependencies (including Pi GPIO libraries on Raspberry Pi)
 - Install Mosquitto (MQTT broker) and Ollama
-- Pull the default LLM model (`gemma4:e2b`) and embedding model (`all-minilm:l6-v2`)
+- Pull the default LLM model (`qwen2.5:1.5b`) and embedding model (`all-minilm:l6-v2`)
 - Create a default `config.yaml`
 
 ### Start Services
@@ -201,7 +201,7 @@ node:
 
 ollama:
   base_url: "http://localhost:11434"
-  model: "gemma4:e2b"
+  model: "qwen2.5:1.5b"
 
 mqtt:
   broker: "localhost"
