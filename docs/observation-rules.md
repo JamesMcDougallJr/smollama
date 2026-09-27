@@ -1,7 +1,9 @@
 # Design: Derived Rules and Closed-Loop Observation
 
-**Status: proposed. Nothing here is implemented.** This documents the shape
-before code so the shape can be argued with.
+**Status: Tiers 1–2 implemented (`smollama/detectors/`, `smollama/rules/`); Tier 3
+and all LLM authoring still proposed.** The design was written before any code so
+the shape could be argued with first; see *What building phases 1–2 changed about
+this design* near the end for where it turned out to be wrong.
 
 ## The problem
 
@@ -283,8 +285,8 @@ Each phase is shippable and gated on evidence from the previous one.
 
 | Phase | Scope | Validation gate |
 |---|---|---|
-| 1 | Detectors + candidate signals, no LLM | Replay `readings_log`: must fire on the Sep 7 silence and the stuck `hcsr04`. Unit-testable with zero LLM. |
-| 2 | Rules table, `fit:` resolver, deterministic retirement, dashboard view | Rules survive restart; auto-mute triggers on a deliberately noisy rule. |
+| 1 | Detectors + candidate signals, no LLM | **DONE** — `smollama/detectors/`. Fires on the real stuck `hcsr04` (486 readings at 0.0); staleness validated by replaying real data with an advanced clock. |
+| 2 | Rules table, `fit:` resolver, deterministic retirement | **DONE** — `smollama/rules/`. Rules survive restart; auto-mute fires on a deliberately noisy rule. Dashboard view still outstanding. |
 | 3 | Dashboard keep/dismiss feedback | Labels accumulate before anything depends on them. |
 | 4 | LLM rule authoring, bounded, `proposed` only | Human promotes every rule for the first N. Compare generated rules against the hand-known failures. |
 | 5 | LLM review/retire on nominated candidates | Reason log reviewed by hand; churn metric stable. |
@@ -293,6 +295,30 @@ Each phase is shippable and gated on evidence from the previous one.
 
 Phase 1 alone resolves the stated problem. Phases 4+ are optional and should be
 justified by Phase 1–3 evidence, not assumed.
+
+### What building phases 1–2 changed about this design
+
+Four things the plan got wrong, corrected by failing tests rather than by review:
+
+- **A window must be a sample count, not a duration.** `level_shift` first used a
+  300-second recent window, which assumed 30-second cadence; this system logs
+  roughly every 20 minutes, so it would have contained zero samples and never
+  fired in production.
+- **A constant baseline breaks the z-score.** MAD is 0, so a robust z is undefined
+  and the least ambiguous shift there is — a pinned sensor starting to move — was
+  silently missed. It needs its own branch, scored moderately so a `0 -> 0.1` move
+  cannot outrank a 19-day silence.
+- **Not every detector has a threshold.** `flatline` and `stale` are structural
+  (zero variance, or no data); only `level_shift`, `trend`, and `envelope` compare
+  against a number. `threshold_spec` is therefore optional.
+- **Auto-promote needs a fire-rate check.** Without one, a proposed rule that fires
+  constantly is promoted and then muted in the same pass — two state changes for
+  one decision, inflating the very churn metric meant to detect instability.
+
+Also confirmed: `known_sources` is bounded by `readings_log` retention
+(`readings_max_age_days`, 7 days), so a producer dead longer than that is pruned
+and cannot be detected as stale at all. The 19-day case needs a longer-lived
+registry than the readings table provides.
 
 ## Open questions
 
