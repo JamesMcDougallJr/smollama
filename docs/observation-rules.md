@@ -1,8 +1,11 @@
 # Design: Derived Rules and Closed-Loop Observation
 
-**Status: Phases 1–6 implemented. Phase 7 (live actuation) deliberately not.**
-`smollama/detectors/`, `smollama/rules/`, `smollama/actions/`, plus the `/rules`
-page and the keep/dismiss control on `/observations`. The design was written before any code so
+**Status: Phases 1–6 implemented and wired into the live loop. Phase 7 (live
+actuation) deliberately not.** `smollama/detectors/`, `smollama/rules/`,
+`smollama/actions/`, plus the `/rules` page and the keep/dismiss control on
+`/observations`. The observation loop calls the detectors every cycle and only
+invokes the model when something fired — see
+[roadmap/archive/detector-loop-integration.md](../roadmap/archive/detector-loop-integration.md). The design was written before any code so
 the shape could be argued with first; see *What building phases 1–2 changed about
 this design* near the end for where it turned out to be wrong.
 

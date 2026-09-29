@@ -15,6 +15,7 @@ been superseded by a different solution — in which case the plan says so.
 | [Plugin System](plugin-system.md) | 2026-03 | Read/Write/ReadWrite plugin interfaces, loader, discovery |
 | [mDNS Discovery](mdns-discovery.md) | 2026-03 | `_smollama._tcp` announce/browse, `smollama discovery list` |
 | [Memory Utilization](memory-utilization.md) | 2026-09 | Phases 1–3 shipped. **Phase 4 (llama.cpp) superseded** — see below |
+| [Detector → loop integration](detector-loop-integration.md) | 2026-09 | Detect-then-narrate in the live loop; quiet cycles call no model. Records two output defects the validation run exposed |
 
 ## Memory Utilization: why Phase 4 was dropped
 

@@ -45,7 +45,8 @@ Metrics, scored against each case's known answer:
 
 | Metric | Meaning |
 |---|---|
-| `detection` | Flagged the source the case plants (recall) |
+| `detection` | Flagged the source the case plants (recall). **Scan path only** |
+| `echo` | Handed the signal line back unchanged. **Detector path only**; 0.00 is good |
 | `restraint` | Emitted nothing on a deliberately-normal case (precision) |
 | `wall_s`, `eval_tokens`, `resident_mb` | Cost |
 
@@ -103,6 +104,9 @@ uv run pytest
 # 2. generate — slow, local model, stores raw outputs
 uv run python -m smollama.evals run --model qwen2.5:1.5b
 
+#    ...or measure the old scanning path, for comparison
+uv run python -m smollama.evals run --model qwen2.5:1.5b --path scan
+
 # 3. judge — fast, cloud, re-runnable against any stored run
 uv run python -m smollama.evals judge --run <id> --judge claude-opus-5
 
@@ -113,6 +117,44 @@ uv run python -m smollama.evals compare <run-a> <run-b>
 Runs land in `evals/runs/<timestamp>-<model>/` as JSON: the case inputs, raw
 outputs, stage-1 results, and (after judging) rubric scores. Committing a run
 makes a claim reproducible.
+
+## Two paths, and why `detection` only applies to one
+
+`--path` selects which question the model is asked, matching the
+`memory.observation_use_detectors` config switch:
+
+- **`detectors`** (default, what production does) — code detects, the model
+  describes. Cases whose detection is silent make **no model call at all**, and are
+  reported as `decided by detectors` rather than counted as model restraint.
+- **`scan`** — the pre-detector path: the model is handed every reading and asked to
+  find something itself.
+
+On the detector path `detection` is deliberately **not reported**. The detector layer
+decided it, so a number there would credit the model for code's work. `related_sources`
+is likewise excluded from gating and scoring, because the loop fills that field itself
+before storing.
+
+That leaves a real question the harness can still answer deterministically: did the
+model add anything? `echo` is the fraction of observations that hand the signal line
+back verbatim — passing every other gate while contributing nothing. Everything else
+about description quality is genuinely subjective and goes to the judge's `insight`
+and `grounding` dimensions.
+
+`compare` prints a warning when the runs used different paths, because that is a
+comparison of architectures, not of models.
+
+Measured on `qwen2.5:1.5b`, same model and same eight cases:
+
+| | scan | detectors |
+|---|---|---|
+| gate pass | 100% | 100% |
+| detection | **0.00** | n/a — code's, and it caught all 5 |
+| echo | n/a | 0.20 |
+| model calls | 8 of 8 | 5 of 8 |
+| total wall | 165.2s | 117.2s |
+
+The wall-time gap understates the production effect: 3 of 8 golden cases are quiet,
+where in production nearly every cycle is.
 
 ### Judge model and cost
 

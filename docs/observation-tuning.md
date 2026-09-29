@@ -14,6 +14,37 @@ All keys live under `memory:` in `config.yaml` / `cluster.yaml`.
 | `observation_structured_output` | `true` | Pin decoding to a JSON schema. |
 | `observation_use_tools` | `false` | Let the pass call tools and run the full agent loop. |
 | `observation_system_prompt` | `""` | `""` = built-in task prompt, `"node"` = inherit `agent.system_prompt`, or a literal string. |
+| `observation_use_detectors` | `true` | Detect in code, describe with the model. Off restores the old scanning prompt. |
+| `observation_max_signals` | `3` | Most findings described in one cycle, highest score first. |
+| `observation_maintenance_every` | `10` | Run rule lifecycle maintenance once per this many cycles. `0` disables. |
+| `detector_window_hours` | `168` | History the detectors see, independent of `observation_lookback_minutes`. |
+
+## Who does the detecting
+
+`observation_use_detectors` is the biggest switch here, because it changes what the
+model is asked for.
+
+**On (default).** `smollama/detectors/` runs first. If nothing fired, **no model is
+called at all** — the cycle costs zero inference. If something fired, the model gets
+1–3 specific findings and writes one sentence each.
+
+**Off.** Every current reading and an aggregated history go into the prompt and the
+model is asked to find something itself.
+
+Off is the path the evaluation harness measured at **0.00 detection** on
+`qwen2.5:1.5b` — silent even on a 6-sigma spike — and **0.00 restraint** on
+`gemma3:1b`, which flagged deliberately steady readings. Neither can discriminate,
+and no prompt fixes that, which is why detection moved into code. Measured on the
+same eight cases after the switch: 100% gate pass, every planted anomaly surfaced,
+and 3 of 8 cycles needing no model at all.
+
+Keep it on unless you are deliberately reproducing the older behaviour.
+
+On this path the loop fills `related_sources` itself from the signal that fired
+rather than trusting the model to copy an identifier — `qwen2.5:1.5b` returned
+`system:cpu_temp` for a case that never mentioned it, and `system:hcsr04` for
+`hcsr04:distance`. That field decides what later keep/dismiss feedback is attributed
+to, so a wrong one teaches the system about an unrelated source.
 
 ## The one hard constraint
 
