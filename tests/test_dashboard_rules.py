@@ -226,3 +226,28 @@ class TestCreatingARuleFromASignal:
         client = TestClient(create_app(cfg))
         resp = client.post("/api/signals/watch", params=self.PARAMS)
         assert resp.status_code == 503
+
+    def test_the_signal_list_renders_its_controls(self, ctx):
+        """The other tests here run against an empty database, where the signal
+        list is empty and this whole block is skipped."""
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+
+        from smollama.detectors import Signal
+
+        client, _, _ = ctx
+        sig = Signal(
+            source="system:mem_percent", detector="level_shift", score=4.0,
+            direction="above", detail="moved to 42.2 from a baseline of 86",
+            first_seen=datetime.now(timezone.utc),
+            meta={"correlated": ["system:mem_available_mb"]},
+        )
+        with patch("smollama.detectors.detect_all", return_value=[sig]):
+            resp = client.get("/rules")
+
+        assert resp.status_code == 200
+        # Colons must survive into the query string, or the rule identity is wrong.
+        assert "/api/signals/watch?source=system%3Amem_percent" in resp.text
+        assert "/api/signals/propose?source=system%3Amem_percent" in resp.text
+        # The suppressed twin is shown, not silently dropped.
+        assert "same event as system:mem_available_mb" in resp.text
