@@ -3,14 +3,18 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from ..detectors import DetectorConfig, Signal, detect_all
+from ..detectors.source import known_sources, load_series
 from ..readings import ReadingManager
+from ..rules import apply_maintenance, uncovered_signals
 
 if TYPE_CHECKING:
     from ..agent import Agent
     from ..plugins.base import ObservationDomain, ObservationHook
+    from ..rules import RuleStore
     from .local_store import LocalStore
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,54 @@ Respond with a JSON object containing:
         }}
     ]
 }}"""
+
+
+# The prompt that replaces OBSERVATION_PROMPT once detectors are on. The difference
+# is not wording, it is which party does the detecting: above, the model is asked to
+# find something in a dump of every source; here, code has already found it and the
+# model only writes the sentence. The eight golden cases measured qwen2.5:1.5b at
+# 0.00 detection and gemma3:1b at 0.00 restraint on the scanning task — neither can
+# discriminate, and no prompt fixes that. Describing a finding it was handed is a
+# task both can do.
+#
+# The no-arithmetic rule is there because qwen2.5:1.5b wrote "exceeds baseline by
+# 12.6 degrees" from a 63.0 reading against a 50.4 baseline. The subtraction is
+# right, but a derived number cannot be checked against the readings, so it fails
+# the no-invented-numbers gate and would be unverifiable in the store as well.
+SIGNAL_OBSERVATION_PROMPT = """Statistical checks flagged {count} deviation(s). \
+The detection is already done. Your only job is to describe each one in a single \
+sentence.
+
+Detected:
+{signals}
+
+Relevant past observations:
+{past_observations}
+
+Rules:
+- One observation per deviation above, at most {max_items}.
+- Each "text" must be one sentence, under {max_chars} characters.
+- Quote only the numbers and time spans written above. Do not compute your own
+  differences, percentages or rates.
+- No advice, no speculation, no cause you were not given.
+- If a past observation above already reports the same deviation, omit it.
+- Output JSON only — no prose before or after it.
+
+Respond with a JSON object containing:
+{{
+    "observations": [
+        {{
+            "text": "Description of the deviation",
+            "type": "pattern|anomaly|status",
+            "confidence": 0.0-1.0,
+            "related_sources": []
+        }}
+    ],
+    "memories": []
+}}
+
+Leave "related_sources" empty — the source identifiers are filled in from the \
+detection, so copying them here is unnecessary."""
 
 
 OBSERVATION_SYSTEM_PROMPT = """You are a sensor-monitoring function, not an assistant.
@@ -141,6 +193,12 @@ class ObservationLoop:
         structured_output: bool = True,
         use_tools: bool = False,
         system_prompt: str = "",
+        use_detectors: bool = False,
+        rule_store: "RuleStore | None" = None,
+        max_signals: int = 3,
+        maintenance_every: int = 10,
+        detector_config: DetectorConfig | None = None,
+        detector_window_seconds: float = 604800.0,
     ):
         """Initialize the observation loop.
 
@@ -162,6 +220,18 @@ class ObservationLoop:
                           LLM call (rotating among active domains), for
                           memory-constrained nodes; "parallel" — generic + every
                           active domain pass run each cycle.
+            use_detectors: Replace the generic scanning pass with detect-then-narrate.
+                           Defaults False here so an explicit caller opts in; the
+                           product default lives in MemoryConfig and is on.
+            rule_store: RuleStore for the coverage pre-filter, evaluation counters,
+                        and maintenance. Without it detection still gates the model,
+                        but the rule lifecycle stays inert.
+            max_signals: Most signals to describe in one cycle, highest score first.
+            maintenance_every: Run apply_maintenance once per this many cycles.
+                               0 disables it.
+            detector_window_seconds: History window detectors see. Deliberately much
+                                     wider than lookback_minutes — a level shift is
+                                     only a shift relative to a long baseline.
         """
         self._store = store
         self._readings = readings
@@ -178,6 +248,13 @@ class ObservationLoop:
         self._max_items = max_items
         self._max_chars = max_chars
         self._use_tools = use_tools
+        self._use_detectors = use_detectors
+        self._rules = rule_store
+        self._max_signals = max_signals
+        self._maintenance_every = maintenance_every
+        self._detector_config = detector_config or DetectorConfig()
+        self._detector_window = detector_window_seconds
+        self._cycles_since_maintenance = 0
 
         # Verified against Ollama: with tools AND a schema, the model emitted zero
         # tool calls and its output was forced into the schema instead; with tools
@@ -311,7 +388,13 @@ class ObservationLoop:
             source_types=None,  # All types
         )
 
-        # 3. Partition readings between domains and the generic pass.
+        # 3. Deterministic detection over the full history, before any prompt exists.
+        # Rule bookkeeping uses every signal (a rule on a domain-claimed source is
+        # still being evaluated); only narration is restricted to unclaimed sources.
+        signals = self._run_detection() if self._use_detectors else []
+        self._record_rule_evaluations(signals)
+
+        # 4. Partition readings between domains and the generic pass.
         # A domain is active when it claims any current or recent reading
         # (recent-only means the source went quiet — worth observing too).
         claimed_ids: set[str] = set()
@@ -327,18 +410,149 @@ class ObservationLoop:
         generic_readings = [r for r in current_readings if r.full_id not in claimed_ids]
         generic_history = [h for h in recent_history if h["full_id"] not in claimed_ids]
 
-        # 4. Dispatch passes according to mode
+        # 5. Dispatch passes according to mode. Domains are untouched by detection:
+        # they derive their own state and build their own prompt, so they claim their
+        # sources first and the detector pass covers only what is left over.
         if not active_domains:
-            await self._run_generic_pass(current_readings, recent_history)
+            await self._run_unclaimed_pass(current_readings, recent_history, signals)
         elif self._domains_mode == "parallel":
             for domain in active_domains:
                 await self._run_domain_pass(domain, current_readings, recent_history)
             if generic_readings:
-                await self._run_generic_pass(generic_readings, generic_history)
+                unclaimed = [s for s in signals if s.source not in claimed_ids]
+                await self._run_unclaimed_pass(
+                    generic_readings, generic_history, unclaimed
+                )
         else:  # "replace": one focused pass per cycle, rotating among active domains
             domain = active_domains[self._domain_rotation % len(active_domains)]
             self._domain_rotation += 1
             await self._run_domain_pass(domain, current_readings, recent_history)
+
+        # 6. Lifecycle maintenance, on a slower cadence than observation.
+        self._maybe_run_maintenance()
+
+    async def _run_unclaimed_pass(
+        self,
+        readings: list,
+        history: list[dict],
+        signals: list[Signal],
+    ) -> None:
+        """Observe the sources no domain claimed, by whichever path is configured."""
+        if self._use_detectors:
+            await self._run_detector_pass(readings, signals)
+        else:
+            await self._run_generic_pass(readings, history)
+
+    def _run_detection(self) -> list[Signal]:
+        """Run every detector over the stored history. Never raises.
+
+        A failure here deliberately does not fall back to the scanning pass:
+        that path was measured at 0.00 detection, so falling back would spend
+        35-104s of model time to learn nothing. Better to log and stay quiet.
+        """
+        now = datetime.now(timezone.utc)
+        db = str(self._store.db_path)
+        try:
+            series = load_series(db, window_seconds=self._detector_window, now=now)
+            return detect_all(
+                series,
+                now=now,
+                config=self._detector_config,
+                expected_sources=known_sources(db),
+            )
+        except Exception as e:
+            logger.error("Detection pass failed: %s", e, exc_info=True)
+            return []
+
+    def _record_rule_evaluations(self, signals: list[Signal]) -> None:
+        """Count this cycle against every active rule, fired or not.
+
+        This is what makes the lifecycle move. `apply_maintenance` decides on
+        `evaluations` and `fire_rate`, so without a count per cycle — including the
+        quiet ones — auto-mute and auto-retire can never trigger and every rule
+        lives forever. Only active rules are counted: a proposed rule is not
+        monitoring anything yet, so crediting it with evaluations would let it be
+        auto-promoted on evidence it never gathered.
+        """
+        if self._rules is None or not self._use_detectors:
+            return
+        fired = {(s.source, s.detector, s.direction) for s in signals}
+        for rule in self._rules.active_rules():
+            try:
+                self._rules.record_evaluation(rule.id, fired=rule.identity in fired)
+            except Exception as e:
+                logger.warning("Could not record evaluation for rule %s: %s", rule.id, e)
+
+    def _maybe_run_maintenance(self) -> None:
+        """Apply deterministic lifecycle transitions once per N cycles."""
+        if self._rules is None or self._maintenance_every <= 0:
+            return
+        self._cycles_since_maintenance += 1
+        if self._cycles_since_maintenance < self._maintenance_every:
+            return
+        self._cycles_since_maintenance = 0
+        try:
+            actions = apply_maintenance(
+                self._rules, known_sources=known_sources(str(self._store.db_path))
+            )
+        except Exception as e:
+            logger.error("Rule maintenance failed: %s", e, exc_info=True)
+            return
+        if actions:
+            logger.info(
+                "Rule maintenance: %s",
+                ", ".join(f"{a.action} {a.rule_id}" for a in actions),
+            )
+
+    async def _run_detector_pass(
+        self,
+        readings: list,
+        signals: list[Signal],
+    ) -> None:
+        """Describe the signals code already found — or call no model at all.
+
+        The skip is the point. Every cycle previously cost 35-104s of inference
+        whether or not anything had happened, and most cycles are quiet.
+        """
+        if self._rules is not None:
+            signals = uncovered_signals(signals, self._rules)
+
+        if not signals:
+            logger.debug("No uncovered signals this cycle — no model call")
+            return
+
+        # detect_all already sorts, but sort here too so max_signals truncation is
+        # correct no matter where the list came from.
+        top = sorted(signals, key=lambda s: s.score, reverse=True)[: self._max_signals]
+        flagged = {s.source for s in top}
+
+        past_obs = self._store.search_observations(
+            query=" ".join(sorted(flagged)),
+            limit=5,
+        )
+
+        prompt = SIGNAL_OBSERVATION_PROMPT.format(
+            count=len(top),
+            # Just the detail. Each Signal.detail is self-contained by design, and a
+            # "[detector/direction]" prefix was echoed straight into stored
+            # observation text by qwen2.5:1.5b — a machine tag in a human sentence.
+            signals="\n".join(f"- {s.detail}" for s in top),
+            past_observations=self._format_past_observations(past_obs),
+            max_items=self._max_items,
+            max_chars=self._max_chars,
+        )
+
+        # Snapshot only the flagged sources: the input snapshot is the provenance a
+        # later keep/drop verdict is attributed to, and pinning it to every reading
+        # would credit feedback to sources that had nothing to do with the finding.
+        # A stale signal has no current reading at all, which is correct — absence
+        # is the finding.
+        await self._query_and_store(
+            prompt,
+            [r for r in readings if r.full_id in flagged],
+            pass_name="detectors",
+            attribute_to=flagged,
+        )
 
     async def _run_generic_pass(
         self,
@@ -402,6 +616,7 @@ class ObservationLoop:
         prompt: str,
         readings: list,
         pass_name: str,
+        attribute_to: set[str] | None = None,
     ) -> None:
         """Run the LLM query for one pass and store the parsed results."""
         input_snapshot = [
@@ -437,7 +652,10 @@ class ObservationLoop:
                 )
                 return
 
-            await self._process_response(response, self.session_id, input_snapshot)
+            await self._process_response(
+                response, self.session_id, input_snapshot,
+                attribute_to=attribute_to,
+            )
 
         except Exception as e:
             logger.error(f"LLM query failed during {pass_name} observation pass: {e}")
@@ -547,13 +765,41 @@ class ObservationLoop:
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _sanitize_sources(
+        cited: list | None, attribute_to: set[str] | None
+    ) -> list[str] | None:
+        """Keep only sources the pass was actually about; fall back to all of them.
+
+        Measured on qwen2.5:1.5b under the detector path: text that correctly
+        described the finding, paired with `related_sources` of "system:cpu_temp" on
+        a case that never mentioned it, and "system:hcsr04" for "hcsr04:distance".
+        A 1.5B model does not reliably copy an identifier, and there is no reason to
+        let it try — the detector already knows which source fired.
+
+        This is not cosmetic. `related_sources` is what a later keep/drop verdict is
+        attributed to (`feedback_for_sources`) and what a rule would be authored
+        against, so a wrong one teaches the system about a source that had nothing
+        to do with the finding.
+        """
+        if not attribute_to:
+            return cited or None
+        kept = [s for s in (cited or []) if s in attribute_to]
+        return kept or sorted(attribute_to)
+
     async def _process_response(
         self,
         response: str,
         session_id: str,
         input_snapshot: list[dict],
+        attribute_to: set[str] | None = None,
     ) -> None:
-        """Parse LLM response and store observations/memories."""
+        """Parse LLM response and store observations/memories.
+
+        `attribute_to` is the set of sources the pass is actually about. When given,
+        the model's `related_sources` is filtered to it and falls back to it when
+        nothing survives — see _sanitize_sources for why.
+        """
         import json
 
         try:
@@ -575,7 +821,9 @@ class ObservationLoop:
                     text=obs["text"],
                     observation_type=obs.get("type", "general"),
                     confidence=obs.get("confidence", 0.8),
-                    related_sources=obs.get("related_sources"),
+                    related_sources=self._sanitize_sources(
+                        obs.get("related_sources"), attribute_to
+                    ),
                     session_id=session_id,
                     input_snapshot=input_snapshot,
                 )

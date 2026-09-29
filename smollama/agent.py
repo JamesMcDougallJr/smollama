@@ -69,6 +69,7 @@ class Agent:
         # Initialize memory system (skipped in edge mode)
         self._memory: LocalStore | None = None
         self._observation_loop: ObservationLoop | None = None
+        self._rules = None
         if not self._is_edge:
             if config.memory.embedding_provider == "ollama":
                 embedder = OllamaEmbeddings(
@@ -84,6 +85,14 @@ class Agent:
                 node_id=config.node.name,
                 embeddings=embedder,
             )
+
+            # Rule store shares memory.db with LocalStore (its own table), so the
+            # dashboard's RuleStore and this one see the same rules — the dashboard
+            # is where a human promotes or mutes what the loop nominates.
+            if config.memory.observation_use_detectors:
+                from .rules import RuleStore
+
+                self._rules = RuleStore(config.memory.db_path)
 
             if config.memory.observation_enabled:
                 self._observation_loop = ObservationLoop(
@@ -104,6 +113,11 @@ class Agent:
                     structured_output=config.memory.observation_structured_output,
                     use_tools=config.memory.observation_use_tools,
                     system_prompt=config.memory.observation_system_prompt,
+                    use_detectors=config.memory.observation_use_detectors,
+                    rule_store=self._rules,
+                    max_signals=config.memory.observation_max_signals,
+                    maintenance_every=config.memory.observation_maintenance_every,
+                    detector_window_seconds=config.memory.detector_window_hours * 3600,
                 )
 
         # Initialize frame search (edge relays a camera writer's spool; master
@@ -222,6 +236,13 @@ class Agent:
             self._memory.connect()
             logger.info("Memory store connected")
 
+        if self._rules:
+            self._rules.connect()
+            logger.info(
+                "Rule store connected (%d active rules)",
+                len(self._rules.active_rules()),
+            )
+
         # Connect frame store and start daily retention (master only)
         if self._frames:
             self._frames.connect()
@@ -329,6 +350,8 @@ class Agent:
         self._plugin_loader.shutdown_plugins()
         if self._memory:
             self._memory.close()
+        if self._rules:
+            self._rules.close()
         if self._frames:
             self._frames.close()
 

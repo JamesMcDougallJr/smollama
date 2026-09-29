@@ -112,6 +112,22 @@ class MemoryConfig:
     #   "node"   — inherit agent.system_prompt, i.e. behave like the node persona
     #   <text>   — use this literal prompt
     observation_system_prompt: str = ""
+    # Detect in code, describe with the model. On, the observation pass runs the
+    # detectors in smollama/detectors/ and only calls the model when something
+    # fired, handing it the specific finding. Off, the model is asked to scan every
+    # reading itself — the path the eval harness measured at 0.00 detection on
+    # qwen2.5:1.5b and 0.00 restraint on gemma3:1b. Turn it off only to reproduce
+    # that older behaviour.
+    observation_use_detectors: bool = True
+    observation_max_signals: int = 3     # most findings described in one cycle
+    # Rule lifecycle maintenance runs once per this many observation cycles. At the
+    # 15-minute default that is ~2.5h, which is the right order for decisions made
+    # on accumulated evaluation counts. 0 disables it.
+    observation_maintenance_every: int = 10
+    # History the detectors see, independent of observation_lookback_minutes: a
+    # level shift is only a shift relative to a long baseline, and staleness needs
+    # to look back further than a reading interval. Capped by readings_max_age_days.
+    detector_window_hours: int = 168
     sensor_log_retention_days: int = 90
     observation_max_age_days: int = 3    # delete observations older than this on each loop tick
     readings_max_age_days: int = 7       # delete readings older than this on each loop tick
@@ -581,6 +597,22 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 observation_system_prompt=mem_data.get(
                     "observation_system_prompt",
                     config.memory.observation_system_prompt,
+                ),
+                observation_use_detectors=mem_data.get(
+                    "observation_use_detectors",
+                    config.memory.observation_use_detectors,
+                ),
+                observation_max_signals=mem_data.get(
+                    "observation_max_signals",
+                    config.memory.observation_max_signals,
+                ),
+                observation_maintenance_every=mem_data.get(
+                    "observation_maintenance_every",
+                    config.memory.observation_maintenance_every,
+                ),
+                detector_window_hours=mem_data.get(
+                    "detector_window_hours",
+                    config.memory.detector_window_hours,
                 ),
                 sensor_log_retention_days=mem_data.get(
                     "sensor_log_retention_days",
