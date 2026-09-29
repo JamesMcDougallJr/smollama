@@ -69,8 +69,17 @@ def _is_allowed(number: float, allowed: set[float]) -> bool:
     return any(abs(number - a) <= _NUMBER_TOL for a in allowed)
 
 
-def run_gates(response: Any, case, *, max_items: int, max_chars: int) -> GateResult:
-    """Apply every deterministic gate. Any failure means the case scores 0."""
+def run_gates(
+    response: Any, case, *, max_items: int, max_chars: int,
+    authored_sources: bool = True,
+) -> GateResult:
+    """Apply every deterministic gate. Any failure means the case scores 0.
+
+    `authored_sources=False` means the model did not write `related_sources` — on
+    the detector path the loop fills it from the detection and discards anything
+    invalid, so gating on it here would report a failure that cannot reach the
+    store. See ObservationLoop._sanitize_sources.
+    """
     failures: list[str] = []
     detail: dict[str, str] = {}
 
@@ -107,7 +116,7 @@ def run_gates(response: Any, case, *, max_items: int, max_chars: int) -> GateRes
             failures.append("enum")
             detail["enum"] = f"observation {i}: type={o.get('type')!r}"
 
-        for src in o.get("related_sources") or []:
+        for src in (o.get("related_sources") or []) if authored_sources else []:
             if src not in allowed_sources:
                 failures.append("sources_exist")
                 detail["sources_exist"] = f"observation {i}: {src!r} not in input"
@@ -126,12 +135,41 @@ def run_gates(response: Any, case, *, max_items: int, max_chars: int) -> GateRes
     return GateResult(not ordered, ordered, detail)
 
 
-def score_metrics(response: Any, case) -> dict[str, float | None]:
+def _normalize(text: str) -> str:
+    return " ".join(str(text).lower().split()).rstrip(".")
+
+
+def _echo_rate(observations: list, case) -> float | None:
+    """Fraction of observations that just hand the signal line back.
+
+    0.0 is the goal. 1.0 means the model contributed nothing a `print()` could not
+    have — worth knowing, because it passes every other gate.
+    """
+    if not case.signals or not observations:
+        return None if not observations else 0.0
+    signals = [_normalize(s) for s in case.signals]
+    copies = 0
+    for o in observations:
+        text = _normalize(o.get("text", ""))
+        if text and any(text in s or s in text for s in signals):
+            copies += 1
+    return copies / len(observations)
+
+
+def score_metrics(
+    response: Any, case, *, authored_sources: bool = True
+) -> dict[str, float | None]:
     """Score against the case's known answer.
 
     `detection` only applies to cases that plant an anomaly; `restraint` only to
     cases where silence is correct. Each is None on the other kind, so an average
     can never quietly blend them.
+
+    `authored_sources=False` means the model was handed the finding rather than
+    asked to find it. `detection` is then **not reported at all**: the detector layer
+    decided it, and printing a number would credit the model for code's work. In its
+    place comes `echo`, which catches the failure that task actually has — returning
+    the signal line unchanged, which passes every gate while adding nothing.
     """
     observations = []
     if isinstance(response, dict) and isinstance(response.get("observations"), list):
@@ -141,11 +179,15 @@ def score_metrics(response: Any, case) -> dict[str, float | None]:
         "n_observations": float(len(observations)),
         "detection": None,
         "restraint": None,
+        "echo": None if authored_sources else _echo_rate(observations, case),
     }
 
     if case.is_restraint_case:
         metrics["restraint"] = 1.0 if not observations else 0.0
         return metrics
+
+    if not authored_sources:
+        return metrics  # detection was the detector's call, not the model's
 
     # A source counts as flagged whether it's in related_sources or named in the
     # text — a model shouldn't lose detection credit for a formatting choice.
@@ -163,15 +205,17 @@ def score_metrics(response: Any, case) -> dict[str, float | None]:
 
 
 def score_case(
-    response: Any, case, *, max_items: int, max_chars: int
+    response: Any, case, *, max_items: int, max_chars: int,
+    authored_sources: bool = True,
 ) -> dict[str, Any]:
     """Full stage-1 result for one case.
 
     A gate failure zeroes the case outright: there is no partial credit for
     well-written output that doesn't parse or that fabricates a number.
     """
-    gates = run_gates(response, case, max_items=max_items, max_chars=max_chars)
-    metrics = score_metrics(response, case)
+    gates = run_gates(response, case, max_items=max_items, max_chars=max_chars,
+                      authored_sources=authored_sources)
+    metrics = score_metrics(response, case, authored_sources=authored_sources)
 
     return {
         "case_id": case.id,

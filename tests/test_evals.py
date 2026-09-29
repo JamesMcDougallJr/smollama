@@ -243,3 +243,135 @@ class TestCaseFixtures:
 
         ids = {c.id for c in load_cases()}
         assert {"writer_silent", "stuck_sensor"} <= ids
+
+
+class TestDetectorPathCases:
+    """The detector path hands the model signal text, so that text is now part of
+    the case contract — it must not trip the gates that judge the answer."""
+
+    def test_detection_cases_carry_signals(self):
+        from smollama.evals.cases import load_cases
+
+        for case in load_cases():
+            if case.is_restraint_case:
+                assert not case.signals, (
+                    f"{case.id}: a restraint case with signals would call the model "
+                    "on a cycle production would skip"
+                )
+            else:
+                assert case.signals, (
+                    f"{case.id}: an anomaly case with no signals scores 0 detection "
+                    "on the detector path, which would misreport the model"
+                )
+
+    def test_signal_text_quotes_only_numbers_from_the_case(self):
+        """A signal that introduces a new number makes correct output fail the
+        no-invented-numbers gate — the model can only quote what it was given."""
+        from smollama.evals.cases import load_cases
+        from smollama.evals.checks import _case_numbers, _is_allowed, extract_numbers
+
+        for case in load_cases():
+            allowed = _case_numbers(case)
+            for text in case.signals:
+                unknown = [
+                    n for n in extract_numbers(text) if not _is_allowed(n, allowed)
+                ]
+                assert not unknown, f"{case.id}: {unknown} not in current/history"
+
+    def test_signal_names_the_source_the_case_expects(self):
+        from smollama.evals.cases import load_cases
+
+        for case in load_cases():
+            if not case.signals:
+                continue
+            blob = " ".join(case.signals)
+            assert any(src in blob for src in case.expect_detect), (
+                f"{case.id}: no signal names an expected source, so the model "
+                "cannot name it either"
+            )
+
+    def test_silent_detection_yields_no_prompt(self):
+        from smollama.evals.__main__ import _signal_prompt
+        from smollama.evals.cases import load_cases
+
+        cases = {c.id: c for c in load_cases()}
+        assert _signal_prompt(cases["steady_idle"], 3, 200) is None
+        prompt = _signal_prompt(cases["stuck_sensor"], 3, 200)
+        assert prompt is not None and "hcsr04:distance" in prompt
+
+
+class TestHandedTheFinding:
+    """On the detector path the model is handed the finding, so `detection` is not
+    its score to earn — the detector layer decided it. Reporting a number there
+    would credit the model for work code did. What is measurable instead: whether
+    it merely copied the signal back."""
+
+    def _case(self):
+        from smollama.evals.cases import load_cases
+
+        return {c.id: c for c in load_cases()}["temp_spike_severe"]
+
+    def test_invalid_cited_source_is_not_a_gate_failure(self):
+        """The loop replaces a bad related_sources before storing, so a failure
+        here could never reach production."""
+        from smollama.evals.checks import run_gates
+
+        response = {"observations": [{
+            "text": "CPU temp is 82.0 against a baseline of 52.1.",
+            "type": "anomaly", "confidence": 0.9,
+            "related_sources": ["system:invented"],
+        }], "memories": []}
+        assert run_gates(response, self._case(), max_items=3, max_chars=200,
+                         authored_sources=False).passed
+        # ...but it still fails when the model *is* the author.
+        assert not run_gates(response, self._case(), max_items=3,
+                             max_chars=200).passed
+
+    def test_detection_is_not_scored_when_the_finding_was_supplied(self):
+        from smollama.evals.checks import score_metrics
+
+        good = {"observations": [{
+            "text": "System CPU temperature reached 82.0 against a 52.1 baseline.",
+            "type": "anomaly", "confidence": 0.9, "related_sources": [],
+        }], "memories": []}
+        assert score_metrics(good, self._case(),
+                             authored_sources=False)["detection"] is None
+
+        # On the scan path the model did the finding, so there it is scored — and
+        # there it must identify the source, since nothing else will.
+        named = {"observations": [{
+            "text": "CPU temp reached 82.0 against a 52.1 baseline.",
+            "type": "anomaly", "confidence": 0.9,
+            "related_sources": ["system:cpu_temp"],
+        }], "memories": []}
+        assert score_metrics(named, self._case())["detection"] == 1.0
+
+    def test_paraphrase_is_not_punished(self):
+        """"System CPU temperature" instead of "system:cpu_temp" is better prose,
+        and attribution comes from the detector either way."""
+        from smollama.evals.checks import score_metrics
+
+        paraphrase = {"observations": [{
+            "text": "System CPU temperature reached 82.0 against a 52.1 baseline.",
+            "type": "anomaly", "confidence": 0.9, "related_sources": [],
+        }], "memories": []}
+        m = score_metrics(paraphrase, self._case(), authored_sources=False)
+        assert m["echo"] == 0.0
+
+    def test_verbatim_copy_of_the_signal_is_flagged(self):
+        """Observed on qwen2.5:1.5b: it returned the signal line unchanged. That
+        passes every gate while adding nothing."""
+        from smollama.evals.checks import score_metrics
+
+        case = self._case()
+        copied = {"observations": [{
+            "text": case.signals[0],
+            "type": "anomaly", "confidence": 0.9, "related_sources": [],
+        }], "memories": []}
+        assert score_metrics(copied, case, authored_sources=False)["echo"] == 1.0
+
+    def test_echo_is_not_scored_on_the_scan_path(self):
+        from smollama.evals.checks import score_metrics
+
+        out = {"observations": [], "memories": []}
+        assert score_metrics(out, self._case())["echo"] is None

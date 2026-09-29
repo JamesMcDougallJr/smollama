@@ -31,6 +31,17 @@ class Case:
     provenance: str
     notes: str = ""
     tags: list[str] = field(default_factory=list)
+    signals: list[str] = field(default_factory=list)
+    """Detector findings the deterministic layer produces for this case.
+
+    Used by `--path detectors`, which evaluates the task the model is actually
+    given in production now: describe a finding code already made. An empty list
+    means detection stays silent, so no model is called at all — and that outcome
+    is reported as decided by code, never credited to the model.
+
+    Every number here must also appear in `current` or `history`, or the
+    no-invented-numbers gate will fail output that correctly quotes the prompt.
+    """
 
     @property
     def is_restraint_case(self) -> bool:
@@ -65,6 +76,10 @@ _PRODUCTION = [
         notes="System metrics stayed live while the vision source went silent. A model "
               "that only looks at present values sees nothing wrong.",
         tags=["staleness", "production"],
+        signals=[
+            "jetson-nano:jetson_inference:person_count has no "
+            "reading in the last 60 minutes; last value 0 seen 19 days ago"
+        ],
     ),
     Case(
         id="stuck_sensor",
@@ -76,6 +91,10 @@ _PRODUCTION = [
         notes="Zero variance over 113 readings. A distance sensor reading exactly 0.0 "
               "is either mis-wired or dead; steady is not the same as healthy.",
         tags=["flatline", "production"],
+        signals=[
+            "hcsr04:distance has not changed from 0.0 across 113 "
+            "readings"
+        ],
     ),
     Case(
         id="memory_pressure",
@@ -94,6 +113,10 @@ _PRODUCTION = [
         notes="Rising memory with idle load: the interesting part is the divergence, "
               "not either value alone.",
         tags=["trend", "production"],
+        signals=[
+            "system:mem_percent rose to 81.4 from a baseline "
+            "average of 74.2 over 20 readings"
+        ],
     ),
 ]
 
@@ -146,6 +169,10 @@ _GRADED = [
         min_observations=1,
         provenance="synthetic — unmistakable (~6 sigma)",
         tags=["graded"],
+        signals=[
+            "system:cpu_temp is 82.0 against a baseline "
+            "average of 52.1"
+        ],
     ),
     Case(
         id="temp_spike_moderate",
@@ -155,6 +182,10 @@ _GRADED = [
         min_observations=1,
         provenance="synthetic — clear but not dramatic (~3 sigma)",
         tags=["graded"],
+        signals=[
+            "system:cpu_temp is 63.0 against a baseline "
+            "average of 50.4"
+        ],
     ),
 ]
 

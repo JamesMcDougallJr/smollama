@@ -46,6 +46,35 @@ def _prompt(case, max_items: int, max_chars: int) -> str:
     )
 
 
+def _signal_prompt(case, max_items: int, max_chars: int) -> str | None:
+    """Build the detect-then-narrate prompt, or None when detection stays silent.
+
+    None is a real result, not a skip: in production no model is called on that
+    cycle. Returning it here keeps the harness measuring the pipeline that ships
+    rather than a path it no longer takes.
+    """
+    from ..memory.observation_loop import SIGNAL_OBSERVATION_PROMPT
+
+    if not case.signals:
+        return None
+    return SIGNAL_OBSERVATION_PROMPT.format(
+        count=len(case.signals),
+        signals="\n".join(f"- {s}" for s in case.signals),
+        past_observations="No relevant past observations",
+        max_items=max_items,
+        max_chars=max_chars,
+    )
+
+
+def _mark(scored) -> str:
+    """One-glance metric for the console line, whichever path produced it."""
+    m = scored["metrics"]
+    for key, label in (("detection", "det"), ("restraint", "res"), ("echo", "echo")):
+        if m.get(key) is not None:
+            return f"{label}={m[key]:.1f}"
+    return "-"
+
+
 def _generate(model: str, prompt: str, schema: dict, num_predict: int) -> tuple:
     body = {
         "model": model,
@@ -81,10 +110,31 @@ def cmd_run(args) -> int:
     out_dir = RUNS_DIR / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"run {run_id}: {len(cases)} cases against {args.model}")
+    print(f"run {run_id}: {len(cases)} cases against {args.model} "
+          f"(path={args.path})")
     rows = []
     for i, case in enumerate(cases, 1):
-        prompt = _prompt(case, args.max_items, args.max_chars)
+        if args.path == "detectors":
+            prompt = _signal_prompt(case, args.max_items, args.max_chars)
+        else:
+            prompt = _prompt(case, args.max_items, args.max_chars)
+
+        if prompt is None:
+            # Detection was silent, so production would call no model. Score the
+            # empty answer the pipeline actually produces, and mark it as decided
+            # by code so no model is ever credited with this restraint.
+            empty = {"observations": [], "memories": []}
+            scored = score_case(
+                empty, case, max_items=args.max_items, max_chars=args.max_chars,
+                authored_sources=False,
+            )
+            scored.update({"wall_s": 0.0, "eval_tokens": 0, "output": empty,
+                           "decided_by": "code"})
+            rows.append(scored)
+            print(f"  [{i}/{len(cases)}] {case.id:<22} ---  {_mark(scored):<8} "
+                  f"  0.0s    0tok  no signals, no model call")
+            continue
+
         try:
             output, wall, tokens = _generate(
                 args.model, prompt, schema, args.num_predict
@@ -95,23 +145,25 @@ def cmd_run(args) -> int:
             continue
 
         scored = score_case(
-            output, case, max_items=args.max_items, max_chars=args.max_chars
+            output, case, max_items=args.max_items, max_chars=args.max_chars,
+            # On the detector path the loop fills related_sources, so it is not the
+            # model's work to gate or credit.
+            authored_sources=(args.path == "scan"),
         )
         scored.update({"wall_s": round(wall, 1), "eval_tokens": tokens,
-                       "output": output, "prompt": prompt})
+                       "output": output, "prompt": prompt,
+                       "decided_by": "model"})
         rows.append(scored)
 
         flag = "ok " if scored["gates_passed"] else "GATE"
-        det = scored["metrics"].get("detection")
-        res = scored["metrics"].get("restraint")
-        mark = "det=%s" % det if det is not None else "res=%s" % res
-        print(f"  [{i}/{len(cases)}] {case.id:<22} {flag} {mark:<8} "
+        print(f"  [{i}/{len(cases)}] {case.id:<22} {flag} {_mark(scored):<8} "
               f"{wall:5.1f}s {tokens:4d}tok "
               f"{','.join(scored['failures']) if scored['failures'] else ''}")
 
     payload = {
         "run_id": run_id,
         "model": args.model,
+        "path": args.path,
         "settings": {"max_items": args.max_items, "max_chars": args.max_chars,
                      "num_predict": args.num_predict},
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -136,7 +188,8 @@ def cmd_judge(args) -> int:
     # Only gate-passing rows are worth judge tokens.
     requests = calibration_requests()
     for row in payload["results"]:
-        if row.get("gates_passed"):
+        # No prompt means no model output to judge — the detectors decided it.
+        if row.get("gates_passed") and row.get("prompt"):
             requests.append(
                 JudgeRequest(
                     key=row["case_id"],
@@ -178,25 +231,49 @@ def _summarize(payload: dict) -> dict:
            if r["metrics"].get("detection") is not None]
     res = [r["metrics"]["restraint"] for r in rows
            if r["metrics"].get("restraint") is not None]
+    echo = [r["metrics"]["echo"] for r in rows
+            if r["metrics"].get("echo") is not None]
+
+    # Rows the model never saw. Under the detector path a quiet cycle is decided
+    # entirely in code, and folding those into "restraint" would report a model as
+    # disciplined when it was simply never asked. Counted and shown separately.
+    by_code = [r for r in rows if r.get("decided_by") == "code"]
+    by_model = [r for r in rows if r.get("decided_by") != "code"]
 
     summary = {
         "model": payload["model"],
+        "path": payload.get("path", "scan"),
         "cases": len(rows),
+        "model_calls": len(by_model),
+        "decided_by_code": len(by_code),
         "gate_pass_rate": len(gated) / len(rows) if rows else 0.0,
         "detection": statistics.mean(det) if det else None,
         "restraint": statistics.mean(res) if res else None,
+        "echo": statistics.mean(echo) if echo else None,
         "median_wall_s": statistics.median([r["wall_s"] for r in rows]) if rows else None,
+        # Wall time per cycle is the operational number, and it only improves
+        # because of the skipped calls — so it must include them.
+        "total_wall_s": round(sum(r["wall_s"] for r in rows), 1) if rows else None,
     }
     for dim in DIMENSIONS:
         vals = [r["judge"][dim] for r in rows
                 if isinstance(r.get("judge"), dict) and isinstance(r["judge"].get(dim), int)]
         summary[dim] = round(statistics.mean(vals), 2) if vals else None
 
-    print(f"\n── {payload['model']} ──")
+    print(f"\n── {payload['model']} ({summary['path']}) ──")
     print(f"  gate pass   : {summary['gate_pass_rate']*100:.0f}%")
-    print(f"  detection   : {_fmt(summary['detection'])}    (anomaly cases)")
+    if summary["path"] == "detectors":
+        print("  detection   : n/a     decided by the detector layer, not the model")
+        print(f"  echo        : {_fmt(summary['echo'])}    "
+              "(signal copied back verbatim; 0.00 is good)")
+    else:
+        print(f"  detection   : {_fmt(summary['detection'])}    (anomaly cases)")
     print(f"  restraint   : {_fmt(summary['restraint'])}    (normal cases)")
-    print(f"  median wall : {summary['median_wall_s']}s")
+    print(f"  median wall : {summary['median_wall_s']}s    "
+          f"total {summary['total_wall_s']}s")
+    if by_code:
+        print(f"  model calls : {summary['model_calls']} of {len(rows)} "
+              f"({len(by_code)} decided by detectors, no model involved)")
     if any(summary[d] is not None for d in DIMENSIONS):
         print("  judge       : " + "  ".join(
             f"{d}={_fmt(summary[d])}" for d in DIMENSIONS))
@@ -219,7 +296,8 @@ def cmd_compare(args) -> int:
         payloads.append(json.loads(p.read_text()))
 
     summaries = [_summarize(p) for p in payloads]
-    keys = ["gate_pass_rate", "detection", "restraint", "median_wall_s", *DIMENSIONS]
+    keys = ["gate_pass_rate", "detection", "echo", "restraint", "median_wall_s",
+            "total_wall_s", "model_calls", *DIMENSIONS]
 
     print("\n" + "=" * 72)
     print(f"{'metric':<16}" + "".join(f"{s['model']:>18}" for s in summaries))
@@ -229,6 +307,13 @@ def cmd_compare(args) -> int:
         print(f"{k:<16}{cells}")
     print("\nRead per-dimension; a single blended score hides real tradeoffs.")
     print("A 1-point judge difference on one case is noise, not signal.")
+
+    if len({s["path"] for s in summaries}) > 1:
+        print("\nNOTE: these runs used different paths "
+              f"({', '.join(sorted({s['path'] for s in summaries}))}). That is a "
+              "comparison of architectures, not of models — the detector path "
+              "hands the model the finding, so its detection score is not evidence "
+              "the model discriminates better.")
     return 0
 
 
@@ -238,6 +323,12 @@ def main() -> int:
 
     r = sub.add_parser("run", help="generate a run against a local model")
     r.add_argument("--model", required=True)
+    r.add_argument(
+        "--path", choices=["detectors", "scan"], default="detectors",
+        help="detectors: describe findings code made (what production does); "
+             "scan: ask the model to find them itself (the pre-detector path, "
+             "kept for comparison)",
+    )
     r.add_argument("--max-items", type=int, default=3)
     r.add_argument("--max-chars", type=int, default=200)
     r.add_argument("--num-predict", type=int, default=256)

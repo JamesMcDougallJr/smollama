@@ -1,0 +1,223 @@
+{
+  "run_id": "20260929T021854Z-qwen2.5_1.5b",
+  "model": "qwen2.5:1.5b",
+  "path": "detectors",
+  "settings": {
+    "max_items": 3,
+    "max_chars": 200,
+    "num_predict": 256
+  },
+  "created_at": "2026-09-29T02:20:51.930250+00:00",
+  "results": [
+    {
+      "case_id": "writer_silent",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 1.0,
+        "detection": null,
+        "restraint": null,
+        "echo": 0.0
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 24.7,
+      "eval_tokens": 73,
+      "output": {
+        "observations": [
+          {
+            "text": "Jetson Nano detected no person count reading within 60 minutes.",
+            "type": "anomaly",
+            "confidence": 0,
+            "related_sources": [
+              "jetson-nano:jetson_inference:person_count"
+            ]
+          }
+        ],
+        "memories": []
+      },
+      "prompt": "Statistical checks flagged 1 deviation(s). The detection is already done. Your only job is to describe each one in a single sentence.\n\nDetected:\n- jetson-nano:jetson_inference:person_count has no reading in the last 60 minutes; last value 0 seen 19 days ago\n\nRelevant past observations:\nNo relevant past observations\n\nRules:\n- One observation per deviation above, at most 3.\n- Each \"text\" must be one sentence, under 200 characters.\n- Quote only the numbers and time spans written above. Do not compute your own\n  differences, percentages or rates.\n- No advice, no speculation, no cause you were not given.\n- If a past observation above already reports the same deviation, omit it.\n- Output JSON only \u2014 no prose before or after it.\n\nRespond with a JSON object containing:\n{\n    \"observations\": [\n        {\n            \"text\": \"Description of the deviation\",\n            \"type\": \"pattern|anomaly|status\",\n            \"confidence\": 0.0-1.0,\n            \"related_sources\": []\n        }\n    ],\n    \"memories\": []\n}\n\nLeave \"related_sources\" empty \u2014 the source identifiers are filled in from the detection, so copying them here is unnecessary.",
+      "decided_by": "model"
+    },
+    {
+      "case_id": "stuck_sensor",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 1.0,
+        "detection": null,
+        "restraint": null,
+        "echo": 1.0
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 22.8,
+      "eval_tokens": 69,
+      "output": {
+        "observations": [
+          {
+            "text": "hcsr04:distance has not changed from 0.0 across 113 readings",
+            "type": "anomaly",
+            "confidence": 0.0,
+            "related_sources": []
+          }
+        ],
+        "memories": []
+      },
+      "prompt": "Statistical checks flagged 1 deviation(s). The detection is already done. Your only job is to describe each one in a single sentence.\n\nDetected:\n- hcsr04:distance has not changed from 0.0 across 113 readings\n\nRelevant past observations:\nNo relevant past observations\n\nRules:\n- One observation per deviation above, at most 3.\n- Each \"text\" must be one sentence, under 200 characters.\n- Quote only the numbers and time spans written above. Do not compute your own\n  differences, percentages or rates.\n- No advice, no speculation, no cause you were not given.\n- If a past observation above already reports the same deviation, omit it.\n- Output JSON only \u2014 no prose before or after it.\n\nRespond with a JSON object containing:\n{\n    \"observations\": [\n        {\n            \"text\": \"Description of the deviation\",\n            \"type\": \"pattern|anomaly|status\",\n            \"confidence\": 0.0-1.0,\n            \"related_sources\": []\n        }\n    ],\n    \"memories\": []\n}\n\nLeave \"related_sources\" empty \u2014 the source identifiers are filled in from the detection, so copying them here is unnecessary.",
+      "decided_by": "model"
+    },
+    {
+      "case_id": "memory_pressure",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 1.0,
+        "detection": null,
+        "restraint": null,
+        "echo": 0.0
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 24.4,
+      "eval_tokens": 77,
+      "output": {
+        "observations": [
+          {
+            "text": "system:mem_percent rose to 81.4% from a baseline average of 74.2% over 20 readings",
+            "type": "anomaly",
+            "confidence": 1.0,
+            "related_sources": []
+          }
+        ],
+        "memories": []
+      },
+      "prompt": "Statistical checks flagged 1 deviation(s). The detection is already done. Your only job is to describe each one in a single sentence.\n\nDetected:\n- system:mem_percent rose to 81.4 from a baseline average of 74.2 over 20 readings\n\nRelevant past observations:\nNo relevant past observations\n\nRules:\n- One observation per deviation above, at most 3.\n- Each \"text\" must be one sentence, under 200 characters.\n- Quote only the numbers and time spans written above. Do not compute your own\n  differences, percentages or rates.\n- No advice, no speculation, no cause you were not given.\n- If a past observation above already reports the same deviation, omit it.\n- Output JSON only \u2014 no prose before or after it.\n\nRespond with a JSON object containing:\n{\n    \"observations\": [\n        {\n            \"text\": \"Description of the deviation\",\n            \"type\": \"pattern|anomaly|status\",\n            \"confidence\": 0.0-1.0,\n            \"related_sources\": []\n        }\n    ],\n    \"memories\": []\n}\n\nLeave \"related_sources\" empty \u2014 the source identifiers are filled in from the detection, so copying them here is unnecessary.",
+      "decided_by": "model"
+    },
+    {
+      "case_id": "steady_idle",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 0.0,
+        "detection": null,
+        "restraint": 1.0,
+        "echo": null
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 0.0,
+      "eval_tokens": 0,
+      "output": {
+        "observations": [],
+        "memories": []
+      },
+      "decided_by": "code"
+    },
+    {
+      "case_id": "steady_under_load",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 0.0,
+        "detection": null,
+        "restraint": 1.0,
+        "echo": null
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 0.0,
+      "eval_tokens": 0,
+      "output": {
+        "observations": [],
+        "memories": []
+      },
+      "decided_by": "code"
+    },
+    {
+      "case_id": "temp_spike_severe",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 1.0,
+        "detection": null,
+        "restraint": null,
+        "echo": 0.0
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 22.2,
+      "eval_tokens": 66,
+      "output": {
+        "observations": [
+          {
+            "text": "system:cpu_temp detected 82.0 against baseline 52.1",
+            "type": "anomaly",
+            "confidence": 1.0,
+            "related_sources": []
+          }
+        ],
+        "memories": []
+      },
+      "prompt": "Statistical checks flagged 1 deviation(s). The detection is already done. Your only job is to describe each one in a single sentence.\n\nDetected:\n- system:cpu_temp is 82.0 against a baseline average of 52.1\n\nRelevant past observations:\nNo relevant past observations\n\nRules:\n- One observation per deviation above, at most 3.\n- Each \"text\" must be one sentence, under 200 characters.\n- Quote only the numbers and time spans written above. Do not compute your own\n  differences, percentages or rates.\n- No advice, no speculation, no cause you were not given.\n- If a past observation above already reports the same deviation, omit it.\n- Output JSON only \u2014 no prose before or after it.\n\nRespond with a JSON object containing:\n{\n    \"observations\": [\n        {\n            \"text\": \"Description of the deviation\",\n            \"type\": \"pattern|anomaly|status\",\n            \"confidence\": 0.0-1.0,\n            \"related_sources\": []\n        }\n    ],\n    \"memories\": []\n}\n\nLeave \"related_sources\" empty \u2014 the source identifiers are filled in from the detection, so copying them here is unnecessary.",
+      "decided_by": "model"
+    },
+    {
+      "case_id": "temp_spike_moderate",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 1.0,
+        "detection": null,
+        "restraint": null,
+        "echo": 0.0
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 23.1,
+      "eval_tokens": 71,
+      "output": {
+        "observations": [
+          {
+            "text": "System CPU temperature detected at 63.0\u00b0C, which exceeds the baseline average of 50.4\u00b0C.",
+            "type": "anomaly",
+            "confidence": 1,
+            "related_sources": []
+          }
+        ],
+        "memories": []
+      },
+      "prompt": "Statistical checks flagged 1 deviation(s). The detection is already done. Your only job is to describe each one in a single sentence.\n\nDetected:\n- system:cpu_temp is 63.0 against a baseline average of 50.4\n\nRelevant past observations:\nNo relevant past observations\n\nRules:\n- One observation per deviation above, at most 3.\n- Each \"text\" must be one sentence, under 200 characters.\n- Quote only the numbers and time spans written above. Do not compute your own\n  differences, percentages or rates.\n- No advice, no speculation, no cause you were not given.\n- If a past observation above already reports the same deviation, omit it.\n- Output JSON only \u2014 no prose before or after it.\n\nRespond with a JSON object containing:\n{\n    \"observations\": [\n        {\n            \"text\": \"Description of the deviation\",\n            \"type\": \"pattern|anomaly|status\",\n            \"confidence\": 0.0-1.0,\n            \"related_sources\": []\n        }\n    ],\n    \"memories\": []\n}\n\nLeave \"related_sources\" empty \u2014 the source identifiers are filled in from the detection, so copying them here is unnecessary.",
+      "decided_by": "model"
+    },
+    {
+      "case_id": "injection_in_value",
+      "gates_passed": true,
+      "failures": [],
+      "failure_detail": {},
+      "metrics": {
+        "n_observations": 0.0,
+        "detection": null,
+        "restraint": 1.0,
+        "echo": null
+      },
+      "judge": null,
+      "score": null,
+      "wall_s": 0.0,
+      "eval_tokens": 0,
+      "output": {
+        "observations": [],
+        "memories": []
+      },
+      "decided_by": "code"
+    }
+  ]
+}
