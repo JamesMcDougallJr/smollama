@@ -1,70 +1,43 @@
 # Smollama Roadmap
 
-## Overview
+Completed plans live in [`archive/`](archive/README.md). This file lists only what is
+active or unstarted.
+
+## Next up
+
+**[Wire the detector layer into the observation loop](detector-loop-integration.md)**
+— the detectors and rules are shipped but nothing calls them; the live loop still
+asks the model to scan raw readings, which the evaluation harness measured as
+producing 0.00 detection on the model in production. Highest value per unit of work
+on this list, and it makes six phases of existing machinery actually do something.
+
+## Active
 
 | Plan | Status | Effort | Description |
 |------|--------|--------|-------------|
-| [Quick Wins](quick-wins.md) | ✅ Complete | Trivial-Small | CLI flags, health endpoint, status improvements |
-| [UV Migration](uv-migration.md) | ✅ Complete | Small | Migrate from pip to UV for faster installs and dependency resolution |
-| [Install Scripts](install-scripts.md) | ✅ Complete | Medium | `install.sh`, `start.sh`, `setup-pi.sh` |
-| [Plugin System](plugin-system.md) | ✅ Complete | Large | `SensorPlugin` / `ToolPlugin` interfaces, plugin loader, discovery |
-| [mDNS Discovery](mdns-discovery.md) | ✅ Complete | Small | Zero-config Pi cluster auto-discovery |
-| [Memory Utilization](memory-utilization.md) | In progress | Small-Large | keep_alive, age-off, compaction, llama.cpp migration |
-| [Improvements](improvements.md) | Not started | Medium | Dashboard, memory, agent, config, MQTT enhancements |
-| [WebSocket Dashboard](websocket-dashboard.md) | Not started | Medium | Real-time dashboard updates via WebSocket |
-| [Multi-Node Dashboard](multi-node-dashboard.md) | Not started | Medium | Unified view of all nodes |
-| [Adaptive Scheduling](adaptive-scheduling.md) | Not started | Small-Medium | Smart observation intervals |
-| [Future Directions](future-directions.md) | Not started | Large | Plugin marketplace, Neo4j, other long-term ideas |
-| [OpenClaw Integration](OPENCLAW_INTEGRATION.md) | Not started | Medium-Large | Gateway client, bidirectional tools, memory bridge, messaging |
+| [Detector → loop integration](detector-loop-integration.md) | Not started | Small-Medium | Replace LLM-as-scanner with detect-then-narrate; skip the model on quiet cycles |
+| [Observation rules & closed loop](../docs/observation-rules.md) | Phases 1–6 ✅, 7 blocked | Large | Detectors, rule lifecycle, LLM authoring/review, dry-run actions. Phase 7 (live actuation) needs a human gate |
+| [Model evaluation](../docs/model-evaluation.md) | ✅ Complete | Medium | Golden cases, deterministic gates, rubric + cloud judge, `smollama.evals` CLI |
+| [Multi-Node Dashboard](multi-node-dashboard.md) | Partially complete | Medium | Node filter bar and `/nodes/{name}` drill-down shipped; cross-node API aggregation not |
+| [Improvements](improvements.md) | Partially complete | Medium | Dashboard auto-refresh/search/sparklines done; memory export, structured logging, config validation, MQTT reconnect outstanding |
+| [Adaptive Scheduling](adaptive-scheduling.md) | Not started | Small-Medium | Volatility-driven observation intervals. **Reconsider scope** — detector gating may make this redundant |
+| [WebSocket Dashboard](websocket-dashboard.md) | Not started | Medium | Replace HTMX polling with push |
+| [OpenClaw Integration](OPENCLAW_INTEGRATION.md) | Not started | Medium-Large | Gateway client, tool bridging, memory bridge, messaging |
+| [Future Directions](future-directions.md) | Not started | Large | Plugin marketplace, Neo4j, federated learning |
+
+## Known issues not big enough for a plan
+
+| Issue | Where | Why it matters |
+|---|---|---|
+| `mqtt_bridge_cache.json` rewritten in full per ingest | `readings/mqtt_bridge.py` | O(N²) across N publishing nodes. Free at 11 sources; at ~1000 entries it is throughput and SD-card endurance death. A WAL table fixes it with no new dependency |
+| Local readings stored naive-local, relayed ones tz-aware UTC | `readings/system.py`, `gpio.py`, plugins | Same instant appears 6h apart in `readings_log`. Detectors normalize defensively, but the source should emit tz-aware UTC |
+| Constant-baseline `level_shift` noise | `detectors/core.py` | `load_avg` moving 0 → 0.27 fires. Unremarkable in practice; needs the `fit:`/feedback evidence from later phases to tune honestly |
+| Correlated sources double-report | `detectors/core.py` | `mem_percent` and `mem_available_mb` are one event reported twice; needs cross-source dedup |
+| `/activity` cannot score | master node | `onnxruntime` not installed and `~/clip-export/text_encoder.onnx` never exported, so CLIP text search silently falls back to LIKE-over-labels |
+| Camera down | Jetson | `gstnvarguscamerasrc: No cameras available`. Needs `scripts/jetson/fix_camera.sh` run with interactive sudo on the device |
+| `known_sources` bounded by retention | `detectors/source.py` | `readings_max_age_days` (7d) prunes the table, so a producer dead longer than that cannot be detected as stale at all |
 
 ## Progress
 
-- 6 / 12 plans started
-- 5 / 12 plans completed (42%)
-
-## Plan Details
-
-### [Quick Wins](quick-wins.md)
-Five self-contained items that can each be done in a single session: `--host` flag, `/api/health` endpoint, `--json` status output, configurable log level, reading source count in status.
-
-### [UV Migration](uv-migration.md)
-Migrate from pip to UV package manager for faster dependency installation and resolution. UV is 10-100x faster than pip and includes built-in virtual environment management. Seven tasks: verify pyproject.toml compatibility, generate uv.lock, update README installation docs, document developer workflow with `uv sync`, prepare for UV-based install scripts, optional Python version pinning, optional venv configuration.
-
-### [Install Scripts](install-scripts.md)
-Three shell scripts (`install.sh`, `start.sh`, `setup-pi.sh`) to simplify first-time setup and daily operation on desktop and Raspberry Pi.
-
-### [Memory Utilization](memory-utilization.md)
-Four phases to reduce RAM pressure and eliminate cold-load latency: (1) ✅ set Ollama `keep_alive=-1` so the model stays resident between 15-minute loop ticks, (2) ✅ automatic age-off for readings (7d) and observations (3d) on each loop tick, (3) ✅ LLM-powered compaction when free RAM drops below a threshold, (4) optional llama.cpp migration as a clean future swap.
-
-### [Improvements](improvements.md)
-Enhancements grouped by subsystem: dashboard (auto-refresh, search, sparklines), memory (retention, export), agent (structured logging, graceful degradation), config (validation), MQTT (reconnect, persistence).
-
-### [Plugin System](plugin-system.md)
-Refactor readings into a formal plugin system with `SensorPlugin` and `ToolPlugin` interfaces, plugin discovery, lifecycle hooks, and per-plugin config validation. Move existing GPIO and System providers into `plugins/builtin/`.
-
-### [WebSocket Dashboard](websocket-dashboard.md)
-Replace HTMX polling with WebSocket push for real-time dashboard updates. Enables instant sensor reading updates, live observation streams, and reduced server load. FastAPI natively supports WebSocket endpoints.
-
-### [mDNS Discovery](mdns-discovery.md)
-Zero-config discovery of Smollama nodes using mDNS/Zeroconf. Nodes announce themselves as `_smollama._tcp` services, enabling automatic cluster formation without manual configuration. Alpaca nodes automatically discover and sync with Llama nodes on the local network. Includes `smollama discovery list` CLI command for debugging.
-
-### [Multi-Node Dashboard](multi-node-dashboard.md)
-Unified dashboard view showing readings, observations, and stats from all nodes in a cluster. The Llama node aggregates data from all Alpaca nodes via parallel API calls with caching. Supports per-node filtering and health monitoring.
-
-### [Adaptive Scheduling](adaptive-scheduling.md)
-Dynamically adjust observation frequency based on sensor volatility. Increases frequency during rapid changes, decreases during stable periods to save resources. Uses coefficient of variation to measure volatility with configurable thresholds and hysteresis.
-
-### [Future Directions](future-directions.md)
-Long-term research directions and speculative features: plugin marketplace (deferred until plugin ecosystem grows), Neo4j graph memory (research needed), federated learning, edge ML training.
-
-### [OpenClaw Integration](OPENCLAW_INTEGRATION.md)
-Integration roadmap for connecting smollama (edge intelligence) with OpenClaw (cloud orchestration gateway). Nine integration approaches ranging from quick wins (REST API skill) to deep integration (bidirectional tool bridging, shared memory, session coordination). Recommended implementation order:
-1. **Gateway WebSocket Client** - Foundation for bidirectional messaging
-2. **Smollama as OpenClaw Skill** - Quick win using existing REST API
-3. **Sensor Data Streaming** - Real-time awareness in OpenClaw sessions
-4. **OpenClaw as Messaging Layer** - Human alerts via WhatsApp/Telegram
-5. **Bidirectional Tool Bridging** - Unified tool ecosystem (smollama ↔ OpenClaw)
-6. **Shared Memory Bridge** - Cross-node semantic search (follows Mem0Bridge pattern)
-7. **Node Registration & Discovery** - Auto-discovery and capability-based routing
-8. **Dashboard Integration** - Unified UI (lower priority)
-9. **Session Coordination** - Remote supervision of smollama agents (complex, optional)
+- 6 plans archived as complete
+- 9 active or unstarted; 1 partially complete ×2, 1 blocked on a human gate
