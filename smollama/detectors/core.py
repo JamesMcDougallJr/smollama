@@ -15,7 +15,7 @@ first needs only history; the second needs domain knowledge we don't have. Every
 source is its own baseline.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 from ..timeutil import normalize_ts
@@ -316,6 +316,69 @@ DETECTORS = (
     detect_trend,
     detect_envelope,
 )
+
+
+# Metrics that are two views of one event. When memory fills, `mem_percent` rises as
+# `mem_available_mb` falls: two signals, one thing happening. Grouped by metric name
+# only — the node prefix is compared separately, so two nodes filling memory stay two
+# events.
+#
+# A hardcoded list is the honest cost here. It needs a line per correlated pair, and
+# an unlisted pair simply reports twice, which is the current behaviour rather than a
+# regression.
+CORRELATED_METRICS: dict[str, str] = {
+    "mem_percent": "memory",
+    "mem_available_mb": "memory",
+    "disk_percent": "disk",
+    "disk_free_gb": "disk",
+}
+
+
+def _correlation_key(signal: "Signal") -> tuple | None:
+    """(node prefix, group, detector) for a correlated metric, else None.
+
+    Direction is deliberately excluded. The memory pair moves in opposite
+    directions by definition, so keying on it would fail to group exactly the case
+    this exists for.
+    """
+    prefix, _, metric = signal.source.rpartition(":")
+    group = CORRELATED_METRICS.get(metric)
+    if group is None:
+        return None
+    return (prefix, group, signal.detector)
+
+
+def dedupe_correlated(signals: list["Signal"]) -> list["Signal"]:
+    """Collapse signals that describe one event, keeping the highest-scoring.
+
+    The suppressed source is preserved in `meta["correlated"]` rather than dropped:
+    it is still part of the event, and the observation should be attributed to both.
+
+    Not applied inside `detect_all`, and not before rule evaluation — a rule on the
+    suppressed source must still be able to record a fire on a cycle where its twin
+    took the narration slot.
+    """
+    ranked = sorted(signals, key=lambda s: s.score, reverse=True)
+    winners: dict[tuple, Signal] = {}
+    out: list[Signal] = []
+
+    for signal in ranked:
+        key = _correlation_key(signal)
+        if key is None:
+            out.append(signal)
+            continue
+        winner = winners.get(key)
+        if winner is None:
+            # Copy so the caller's signal (which rule evaluation still holds) is
+            # not mutated by the bookkeeping below.
+            winner = replace(signal, meta={**signal.meta})
+            winners[key] = winner
+            out.append(winner)
+        else:
+            winner.meta.setdefault("correlated", []).append(signal.source)
+
+    out.sort(key=lambda s: s.score, reverse=True)
+    return out
 
 
 def detect_all(

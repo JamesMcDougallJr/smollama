@@ -30,6 +30,11 @@
                 {{ signals|length }} with no active rule watching them
             </span>
         </div>
+        <p class="text-sm text-slate-500">
+            Each of these costs an LLM call every observation cycle.
+            <strong>Watch</strong> creates an active rule so code tracks it instead
+            and the model stops being asked about it.
+        </p>
         {% if signals %}
         <div class="space-y-2">
             {% for s in signals %}
@@ -43,6 +48,23 @@
                     <span class="ml-auto font-mono text-xs text-slate-500">score {{ "%.2f"|format(s.score) }}</span>
                 </div>
                 <p class="mt-2 text-sm text-slate-600">{{ s.detail }}</p>
+                {% if s.meta and s.meta.correlated %}
+                <p class="mt-1 text-xs text-slate-400">
+                    same event as {{ s.meta.correlated | join(', ') }}
+                </p>
+                {% endif %}
+                <div class="mt-3 flex gap-2">
+                    <form method="post" action="/api/signals/watch?source={{ s.source | urlencode }}&detector={{ s.detector | urlencode }}&direction={{ s.direction | urlencode }}">
+                        <button type="submit" class="rounded border border-slate-300 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                            Watch
+                        </button>
+                    </form>
+                    <form method="post" action="/api/signals/propose?source={{ s.source | urlencode }}&detector={{ s.detector | urlencode }}&direction={{ s.direction | urlencode }}">
+                        <button type="submit" class="rounded px-3 py-1 text-xs font-medium text-slate-500 hover:text-slate-800">
+                            Propose only
+                        </button>
+                    </form>
+                </div>
             </div>
             {% endfor %}
         </div>

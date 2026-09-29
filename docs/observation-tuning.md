@@ -40,6 +40,17 @@ and 3 of 8 cycles needing no model at all.
 
 Keep it on unless you are deliberately reproducing the older behaviour.
 
+A signal keeps costing an inference every cycle until an **active** rule covers it.
+`/rules` lists what is firing with a **Watch** button that creates one — before that
+button existed, `store.propose` had no caller in the running system, so no rule could
+come into being and the coverage filter was structurally inert.
+
+Signals that describe one event are collapsed first: `mem_percent` and
+`mem_available_mb` move in opposite directions when memory fills, so only the
+highest-scoring of the pair is narrated and the other is carried along in
+`related_sources`. The pairs are a hardcoded list in `detectors/core.py`
+(`CORRELATED_METRICS`); an unlisted pair reports twice.
+
 On this path the loop fills `related_sources` itself from the signal that fired
 rather than trusting the model to copy an identifier — `qwen2.5:1.5b` returned
 `system:cpu_temp` for a case that never mentioned it, and `system:hcsr04` for

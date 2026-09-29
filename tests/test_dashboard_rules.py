@@ -147,3 +147,82 @@ class TestFeedbackControl:
             follow_redirects=False,
         )
         assert resp.headers["location"] == "/observations?hours=24"
+
+
+class TestCreatingARuleFromASignal:
+    """Before this, nothing in the running system could call `store.propose` —
+    `author_rules` is the only caller and nothing calls *it*. With no rule able to
+    exist, `uncovered_signals` could never filter anything, so every firing signal
+    cost an inference every cycle forever. This is the surface that closes it.
+    """
+
+    PARAMS = {
+        "source": "system:mem_percent",
+        "detector": "level_shift",
+        "direction": "above",
+    }
+
+    def test_watch_creates_an_active_rule(self, ctx):
+        """Active is the point of the click: only active rules cover a signal, so
+        proposing alone would leave it still being narrated."""
+        client, _, rules = ctx
+        resp = client.post("/api/signals/watch", params=self.PARAMS,
+                           follow_redirects=False)
+        assert resp.status_code == 303
+        rule = rules.find(**{"full_id": self.PARAMS["source"],
+                             "detector": "level_shift", "direction": "above"})
+        assert rule is not None
+        assert rule.state == "active"
+
+    def test_a_watched_signal_stops_being_narrated(self, ctx):
+        from smollama.detectors import Signal
+        from smollama.rules import uncovered_signals
+        from datetime import datetime, timezone
+
+        client, _, rules = ctx
+        client.post("/api/signals/watch", params=self.PARAMS)
+        sig = Signal(source="system:mem_percent", detector="level_shift",
+                     score=4.0, direction="above", detail="moved",
+                     first_seen=datetime.now(timezone.utc))
+        assert uncovered_signals([sig], rules) == []
+
+    def test_propose_leaves_it_for_later(self, ctx):
+        client, _, rules = ctx
+        client.post("/api/signals/propose", params=self.PARAMS)
+        rule = rules.find(self.PARAMS["source"], "level_shift", "above")
+        assert rule.state == "proposed"
+
+    def test_the_rationale_records_who_decided(self, ctx):
+        """The reason log is the only audit trail for why a source stopped being
+        reported on."""
+        client, _, rules = ctx
+        client.post("/api/signals/watch", params=self.PARAMS)
+        rule = rules.find(self.PARAMS["source"], "level_shift", "above")
+        assert "dashboard" in (rule.rationale or "").lower()
+
+    def test_watching_twice_is_harmless(self, ctx):
+        client, _, rules = ctx
+        client.post("/api/signals/watch", params=self.PARAMS)
+        client.post("/api/signals/watch", params=self.PARAMS)
+        assert len(rules.all_rules()) == 1
+
+    def test_re_proposing_does_not_reactivate_a_muted_rule(self, ctx):
+        """`propose` is documented not to resurrect state, and the dashboard must
+        not route around that by promoting on every click."""
+        client, _, rules = ctx
+        r = rules.propose(self.PARAMS["source"], "level_shift", "above")
+        rules.mute(r.id, "known normal")
+        client.post("/api/signals/propose", params=self.PARAMS)
+        assert rules.get(r.id).state == "muted"
+
+    def test_unknown_action_is_rejected(self, ctx):
+        client, _, _ = ctx
+        resp = client.post("/api/signals/frobnicate", params=self.PARAMS)
+        assert resp.status_code == 400
+
+    def test_requires_a_rule_store(self, tmp_path):
+        cfg = Config()
+        cfg.memory.db_path = str(tmp_path / "m.db")
+        client = TestClient(create_app(cfg))
+        resp = client.post("/api/signals/watch", params=self.PARAMS)
+        assert resp.status_code == 503

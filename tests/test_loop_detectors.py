@@ -418,3 +418,71 @@ class TestRelatedSourceSanitizing:
         assert self._observation(store)["related_sources"] == [
             "jetson-nano:vision:person_count"
         ]
+
+
+class TestCorrelatedSignalsInTheLoop:
+    """mem_percent and mem_available_mb fire together on every live cycle, on both
+    nodes — four signals for two events, against three narration slots."""
+
+    def _pair(self):
+        return [
+            signal(source="system:mem_percent", score=4.0),
+            signal(source="system:mem_available_mb", score=3.0, direction="below"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_only_one_of_the_pair_is_narrated(self, store, readings, agent):
+        loop = make_loop(store, readings, agent)
+        with with_signals(self._pair()):
+            await loop.run_once()
+        prompt = agent.query.await_args[0][0]
+        assert "system:mem_percent" in prompt
+        assert "system:mem_available_mb" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_dedup_frees_a_slot_for_a_different_event(
+        self, store, readings, agent
+    ):
+        """The point of the exercise: without dedup the pair would consume two of
+        three slots and crowd out a genuinely separate finding."""
+        loop = make_loop(store, readings, agent, max_signals=2)
+        with with_signals(self._pair() + [
+            signal(source="hcsr04:distance", detector="flatline",
+                   direction="flat", score=2.0),
+        ]):
+            await loop.run_once()
+        prompt = agent.query.await_args[0][0]
+        assert "hcsr04:distance" in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_suppressed_source_still_gets_attribution(
+        self, store, readings, agent
+    ):
+        """It is part of the same event, so feedback on the observation should
+        reach both sources."""
+        agent.query = AsyncMock(return_value=(
+            '{"observations": [{"text": "Memory use rose to 81.4 from 74.2.",'
+            ' "type": "anomaly", "confidence": 0.9, "related_sources": []}],'
+            ' "memories": []}'
+        ))
+        loop = make_loop(store, readings, agent)
+        with with_signals(self._pair()):
+            await loop.run_once()
+        stored = store.get_observations_since_id(0, limit=1)[0]
+        assert stored["related_sources"] == [
+            "system:mem_available_mb", "system:mem_percent"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_rule_on_the_suppressed_source_still_records_a_fire(
+        self, store, readings, agent, rules
+    ):
+        """Dedup is a narration decision. If it also hid the signal from rule
+        evaluation, a rule on the quieter twin would look like it never fires and
+        would eventually be auto-retired for inactivity it did not have."""
+        r = rules.propose("system:mem_available_mb", "level_shift", "below")
+        rules.promote(r.id)
+        loop = make_loop(store, readings, agent, rules=rules)
+        with with_signals(self._pair()):
+            await loop.run_once()
+        assert rules.get(r.id).fired_count == 1

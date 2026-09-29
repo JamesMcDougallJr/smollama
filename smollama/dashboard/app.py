@@ -195,8 +195,8 @@ def create_app(
         }
 
         if rules is not None:
-            from ..detectors import DetectorConfig, detect_all
-            from ..detectors.source import load_series
+            from ..detectors import DetectorConfig, dedupe_correlated, detect_all
+            from ..detectors.source import known_sources, load_series
             from ..rules import uncovered_signals
 
             all_rules = rules.all_rules()
@@ -208,9 +208,20 @@ def create_app(
             }
 
             try:
-                series = load_series(config.memory.db_path)
-                signals = detect_all(series, config=DetectorConfig())
-                context["signals"] = uncovered_signals(signals, rules)
+                # Same window, staleness registry and dedup as the observation
+                # loop, so this page shows what the loop would actually narrate
+                # rather than a differently-configured second opinion.
+                db = config.memory.db_path
+                series = load_series(
+                    db, window_seconds=config.memory.detector_window_hours * 3600
+                )
+                signals = detect_all(
+                    series, config=DetectorConfig(),
+                    expected_sources=known_sources(db),
+                )
+                context["signals"] = dedupe_correlated(
+                    uncovered_signals(signals, rules)
+                )
             except Exception as e:
                 logger.warning("could not compute signals for rules page: %s", e)
 
@@ -241,6 +252,48 @@ def create_app(
             rules.retire(rule_id, "retired from dashboard")
         else:
             raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
+
+        return RedirectResponse("/rules", status_code=303)
+
+    @app.post("/api/signals/{action}")
+    async def api_signal_action(
+        action: str, source: str, detector: str, direction: str
+    ):
+        """Create a rule from a live signal — the only way one can come into being.
+
+        `author_rules` is the only other caller of `store.propose`, and nothing
+        calls it. Without this endpoint no rule could exist, so `uncovered_signals`
+        filtered nothing and every recurring signal cost an inference every cycle
+        forever. On the live master that was six signals, indefinitely.
+
+        `watch` promotes immediately because only *active* rules cover a signal;
+        proposing alone would leave it still being narrated, which is not what
+        clicking a button on a noisy signal means. `propose` is there for the
+        cautious path — it lands in the proposed list for a later decision.
+
+        Identity comes from query params rather than the path because a `full_id`
+        contains colons and reads badly segmented, and rather than a form body
+        because `request.form()` needs python-multipart.
+        """
+        if rules is None:
+            raise HTTPException(status_code=503, detail="rule store not connected")
+        if action not in ("watch", "propose"):
+            raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
+
+        rule = rules.propose(
+            source, detector, direction,
+            rationale=f"created from a live signal on the dashboard ({action})",
+        )
+        if action == "watch":
+            # Only promote a fresh proposal. Re-proposing is documented not to
+            # resurrect state, and routing around that here would let one click
+            # silently un-mute a rule someone had judged wrong.
+            if rule.state == "proposed":
+                rules.promote(rule.id, "watched from dashboard")
+            else:
+                logger.info(
+                    "signal rule %s is %s, leaving it alone", rule.id, rule.state
+                )
 
         return RedirectResponse("/rules", status_code=303)
 

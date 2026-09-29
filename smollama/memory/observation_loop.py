@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from ..detectors import DetectorConfig, Signal, detect_all
+from ..detectors import DetectorConfig, Signal, dedupe_correlated, detect_all
 from ..detectors.source import known_sources, load_series
 from ..readings import ReadingManager
 from ..rules import apply_maintenance, uncovered_signals
@@ -521,10 +521,18 @@ class ObservationLoop:
             logger.debug("No uncovered signals this cycle — no model call")
             return
 
-        # detect_all already sorts, but sort here too so max_signals truncation is
+        # Collapse correlated sources before spending narration slots on them: on
+        # this system mem_percent and mem_available_mb fire together every cycle on
+        # both nodes, which is four signals for two events. Done here rather than in
+        # detect_all so rule evaluation above still saw every signal.
+        signals = dedupe_correlated(signals)
+
+        # dedupe_correlated sorts, but sort here too so max_signals truncation is
         # correct no matter where the list came from.
         top = sorted(signals, key=lambda s: s.score, reverse=True)[: self._max_signals]
         flagged = {s.source for s in top}
+        for s in top:
+            flagged.update(s.meta.get("correlated", []))
 
         past_obs = self._store.search_observations(
             query=" ".join(sorted(flagged)),
