@@ -246,6 +246,15 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
     except Exception as e:
         logger.warning(f"Rule store unavailable, /rules will be degraded: {e}")
 
+    quarantine = None
+    try:
+        from .quarantine import QuarantineStore
+
+        quarantine = QuarantineStore(config.memory.db_path)
+        quarantine.connect()
+    except Exception as e:
+        logger.warning(f"Quarantine store unavailable, release control is off: {e}")
+
     app = create_app(
         config,
         store=store,
@@ -255,6 +264,7 @@ async def cmd_dashboard(args: argparse.Namespace) -> int:
         observers=plugin_loader.get_observer_plugins(),
         frames=frames,
         rules=rules,
+        quarantine=quarantine,
     )
 
     try:

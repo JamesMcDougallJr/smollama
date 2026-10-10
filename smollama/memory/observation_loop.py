@@ -14,6 +14,7 @@ from ..rules import apply_maintenance, uncovered_signals
 if TYPE_CHECKING:
     from ..agent import Agent
     from ..plugins.base import ObservationDomain, ObservationHook
+    from ..quarantine import QuarantineStore
     from ..rules import RuleStore
     from .local_store import LocalStore
 
@@ -199,6 +200,7 @@ class ObservationLoop:
         maintenance_every: int = 10,
         detector_config: DetectorConfig | None = None,
         detector_window_seconds: float = 604800.0,
+        quarantine: "QuarantineStore | None" = None,
     ):
         """Initialize the observation loop.
 
@@ -229,6 +231,9 @@ class ObservationLoop:
             max_signals: Most signals to describe in one cycle, highest score first.
             maintenance_every: Run apply_maintenance once per this many cycles.
                                0 disables it.
+            quarantine: Sources whose data was judged invalid. They are still read
+                        every cycle, but their repeats are not persisted and
+                        signals about them are not narrated. See quarantine.py.
             detector_window_seconds: History window detectors see. Deliberately much
                                      wider than lookback_minutes — a level shift is
                                      only a shift relative to a long baseline.
@@ -254,6 +259,7 @@ class ObservationLoop:
         self._maintenance_every = maintenance_every
         self._detector_config = detector_config or DetectorConfig()
         self._detector_window = detector_window_seconds
+        self._quarantine = quarantine
         self._cycles_since_maintenance = 0
 
         # Verified against Ollama: with tools AND a schema, the model emitted zero
@@ -380,7 +386,15 @@ class ObservationLoop:
             return
 
         # Log readings to database
-        self._store.log_readings(current_readings, session_id=self.session_id)
+        # Quarantined sources are read but their repeats are not stored. The prompts
+        # below still see every reading; only persistence is filtered. A source whose
+        # value has changed is released here and kept, so this cannot hide a recovery.
+        to_log = (
+            self._quarantine.filter_for_recording(current_readings)
+            if self._quarantine is not None
+            else current_readings
+        )
+        self._store.log_readings(to_log, session_id=self.session_id)
 
         # 2. Get recent reading history (shared by all passes)
         recent_history = self._store.get_recent_readings(
@@ -516,6 +530,13 @@ class ObservationLoop:
         """
         if self._rules is not None:
             signals = uncovered_signals(signals, self._rules)
+
+        # A quarantined source is known-invalid. Its flatline would fire every cycle,
+        # and once recording stops its stale signal would too, costing an inference
+        # per cycle to re-announce something already acted on.
+        if self._quarantine is not None:
+            held = self._quarantine.quarantined_ids()
+            signals = [s for s in signals if s.source not in held]
 
         if not signals:
             logger.debug("No uncovered signals this cycle — no model call")

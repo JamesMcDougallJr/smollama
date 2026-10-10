@@ -70,6 +70,7 @@ class Agent:
         self._memory: LocalStore | None = None
         self._observation_loop: ObservationLoop | None = None
         self._rules = None
+        self._quarantine = None
         if not self._is_edge:
             if config.memory.embedding_provider == "ollama":
                 embedder = OllamaEmbeddings(
@@ -93,6 +94,23 @@ class Agent:
                 from .rules import RuleStore
 
                 self._rules = RuleStore(config.memory.db_path)
+
+            # Shares memory.db like the rule store. Built before the loop because the
+            # loop filters what it persists through it.
+            if config.memory.quarantine_enabled:
+                from .quarantine import QuarantineConfig, QuarantineStore
+
+                self._quarantine = QuarantineStore(
+                    config.memory.db_path,
+                    QuarantineConfig(
+                        enabled=True,
+                        max_sources=config.memory.quarantine_max_sources,
+                        min_samples=config.memory.quarantine_min_samples,
+                        min_flat_hours=config.memory.quarantine_min_flat_hours,
+                        trickle_seconds=config.memory.quarantine_trickle_hours * 3600,
+                        window_seconds=config.memory.detector_window_hours * 3600,
+                    ),
+                )
 
             if config.memory.observation_enabled:
                 self._observation_loop = ObservationLoop(
@@ -118,6 +136,7 @@ class Agent:
                     max_signals=config.memory.observation_max_signals,
                     maintenance_every=config.memory.observation_maintenance_every,
                     detector_window_seconds=config.memory.detector_window_hours * 3600,
+                    quarantine=self._quarantine,
                 )
 
         # Initialize frame search (edge relays a camera writer's spool; master
@@ -218,6 +237,27 @@ class Agent:
                 self._tools.register(RecentActivityTool(self._frames))
                 if self._frames.text_encoder is not None:
                     self._tools.register(ClassifyClipTool(self._frames, self._frames.text_encoder))
+            if self._quarantine is not None:
+                from .detectors.source import load_series
+                from .tools.quarantine_tools import (
+                    ListStoppedSourcesTool,
+                    ResumeRecordingTool,
+                    StopRecordingTool,
+                )
+
+                q_cfg = self._quarantine.config
+                db_path = config.memory.db_path
+                # The loader is how evidence reaches the store: from stored history
+                # for exactly the source named, never from the model's arguments.
+                self._tools.register(StopRecordingTool(
+                    self._quarantine,
+                    lambda source_id: load_series(
+                        db_path, window_seconds=q_cfg.window_seconds,
+                        sources=[source_id],
+                    ).get(source_id, []),
+                ))
+                self._tools.register(ResumeRecordingTool(self._quarantine))
+                self._tools.register(ListStoppedSourcesTool(self._quarantine))
             if self._mem0_client:
                 self._tools.register(CrossNodeRecallTool(self._mem0_client))
             for write_plugin in self._plugin_loader.get_write_plugins():
@@ -235,6 +275,13 @@ class Agent:
         if self._memory:
             self._memory.connect()
             logger.info("Memory store connected")
+
+        if self._quarantine:
+            self._quarantine.connect()
+            logger.info(
+                "Quarantine store connected (%d sources stopped)",
+                len(self._quarantine.quarantined()),
+            )
 
         if self._rules:
             self._rules.connect()
@@ -352,6 +399,8 @@ class Agent:
             self._memory.close()
         if self._rules:
             self._rules.close()
+        if self._quarantine:
+            self._quarantine.close()
         if self._frames:
             self._frames.close()
 

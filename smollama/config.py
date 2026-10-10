@@ -128,6 +128,16 @@ class MemoryConfig:
     # level shift is only a shift relative to a long baseline, and staleness needs
     # to look back further than a reading interval. Capped by readings_max_age_days.
     detector_window_hours: int = 168
+    # Let the agent stop storing a source whose readings are one unchanging value
+    # (a dead or unplugged sensor). Off removes the tools from the model entirely.
+    # Evidence is recomputed in code and a changing source is always refused; see
+    # smollama/quarantine.py. The source is still read every cycle and recording
+    # resumes the moment its value differs.
+    quarantine_enabled: bool = True
+    quarantine_max_sources: int = 10      # most sources stopped at once
+    quarantine_min_samples: int = 30      # identical readings required
+    quarantine_min_flat_hours: float = 6.0  # ...spanning at least this long
+    quarantine_trickle_hours: float = 6.0   # one heartbeat reading kept per interval
     sensor_log_retention_days: int = 90
     observation_max_age_days: int = 3    # delete observations older than this on each loop tick
     readings_max_age_days: int = 7       # delete readings older than this on each loop tick
@@ -613,6 +623,23 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 detector_window_hours=mem_data.get(
                     "detector_window_hours",
                     config.memory.detector_window_hours,
+                ),
+                quarantine_enabled=mem_data.get(
+                    "quarantine_enabled", config.memory.quarantine_enabled
+                ),
+                quarantine_max_sources=mem_data.get(
+                    "quarantine_max_sources", config.memory.quarantine_max_sources
+                ),
+                quarantine_min_samples=mem_data.get(
+                    "quarantine_min_samples", config.memory.quarantine_min_samples
+                ),
+                quarantine_min_flat_hours=mem_data.get(
+                    "quarantine_min_flat_hours",
+                    config.memory.quarantine_min_flat_hours,
+                ),
+                quarantine_trickle_hours=mem_data.get(
+                    "quarantine_trickle_hours",
+                    config.memory.quarantine_trickle_hours,
                 ),
                 sensor_log_retention_days=mem_data.get(
                     "sensor_log_retention_days",

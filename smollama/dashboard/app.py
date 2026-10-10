@@ -84,6 +84,7 @@ def create_app(
     observers: list | None = None,
     frames: Any = None,
     rules: Any = None,
+    quarantine: Any = None,
 ) -> FastAPI:
     """Create the FastAPI dashboard application.
 
@@ -192,6 +193,7 @@ def create_app(
             "signals": [],
             "grouped": {},
             "any_rules": False,
+            "quarantined": quarantine.quarantined() if quarantine is not None else [],
         }
 
         if rules is not None:
@@ -219,9 +221,12 @@ def create_app(
                     series, config=DetectorConfig(),
                     expected_sources=known_sources(db),
                 )
-                context["signals"] = dedupe_correlated(
-                    uncovered_signals(signals, rules)
-                )
+                shown = uncovered_signals(signals, rules)
+                if quarantine is not None:
+                    # Same exclusion as the loop: a stopped source is known-invalid.
+                    held = quarantine.quarantined_ids()
+                    shown = [s for s in shown if s.source not in held]
+                context["signals"] = dedupe_correlated(shown)
             except Exception as e:
                 logger.warning("could not compute signals for rules page: %s", e)
 
@@ -253,6 +258,23 @@ def create_app(
         else:
             raise HTTPException(status_code=400, detail=f"unknown action {action!r}")
 
+        return RedirectResponse("/rules", status_code=303)
+
+    @app.post("/api/quarantine/release")
+    async def api_quarantine_release(source: str):
+        """Resume recording a source. The human override for an agent's decision.
+
+        Source is a query param for the same reasons as /api/signals: a full_id
+        contains colons, and a form body would need python-multipart.
+        """
+        if quarantine is None:
+            raise HTTPException(status_code=503, detail="quarantine store not connected")
+        from ..quarantine import QuarantineRefused
+
+        try:
+            quarantine.release(source, "released from dashboard", by="human")
+        except QuarantineRefused as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
         return RedirectResponse("/rules", status_code=303)
 
     @app.post("/api/signals/{action}")

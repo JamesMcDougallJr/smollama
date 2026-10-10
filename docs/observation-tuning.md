@@ -18,6 +18,11 @@ All keys live under `memory:` in `config.yaml` / `cluster.yaml`.
 | `observation_max_signals` | `3` | Most findings described in one cycle, highest score first. |
 | `observation_maintenance_every` | `10` | Run rule lifecycle maintenance once per this many cycles. `0` disables. |
 | `detector_window_hours` | `168` | History the detectors see, independent of `observation_lookback_minutes`. |
+| `quarantine_enabled` | `true` | Give the agent tools to stop storing a source with invalid data. Off removes them from the model entirely. |
+| `quarantine_max_sources` | `10` | Most sources stopped at once. |
+| `quarantine_min_samples` | `30` | Identical consecutive readings required before a source qualifies. |
+| `quarantine_min_flat_hours` | `6` | ...and they must span at least this long. |
+| `quarantine_trickle_hours` | `6` | While stopped, one heartbeat reading is still kept per this interval. |
 
 ## Who does the detecting
 
@@ -56,6 +61,37 @@ rather than trusting the model to copy an identifier — `qwen2.5:1.5b` returned
 `system:cpu_temp` for a case that never mentioned it, and `system:hcsr04` for
 `hcsr04:distance`. That field decides what later keep/dismiss feedback is attributed
 to, so a wrong one teaches the system about an unrelated source.
+
+## Stopping a source that reports invalid data
+
+The agent has three tools: `stop_recording_source`, `resume_recording_source` and
+`list_stopped_sources`. They exist to save space when a sensor is dead or unplugged
+and just writes the same value forever (an unwired HC-SR04 logged a phantom `0.0`
+every cycle for a week).
+
+A wrong call loses data silently, so the model is not trusted with the decision:
+
+- **It supplies a source and a reason, never evidence.** Code recomputes whether the
+  source's trailing run is one unchanging value (`quarantine_min_samples` readings over
+  `quarantine_min_flat_hours`). Extra arguments are ignored, so there is no path for
+  the model's own numbers into the check.
+- **A changing source is always refused**, whatever the reason. A level shift or a trend
+  is what this system exists to record. Refusals come back as data with a reason, so the
+  model can correct course instead of retrying blindly.
+- **It is reversible by construction.** The source is still read every cycle. Repeats of
+  the frozen value are not stored; the first reading that differs releases it and *is*
+  stored, so a replaced sensor or a door that finally opens resumes within one cycle.
+- **Bounded:** at most `quarantine_max_sources` at once, a one-hour cooldown before a
+  just-released source can be stopped again (flap guard), and an audit row for every
+  stop and release recording who did it.
+
+While stopped, signals about the source are not narrated (its flatline would otherwise
+fire every cycle, and its staleness once recording stops), and `/rules` lists it under
+**Stopped recording** with a **Resume** button.
+
+What it does not do: it does not stop the plugin or the producer, so an edge node keeps
+publishing and the master keeps reading. To actually stop a sensor, disable the plugin in
+config. It also does not delete existing rows.
 
 ## The one hard constraint
 
