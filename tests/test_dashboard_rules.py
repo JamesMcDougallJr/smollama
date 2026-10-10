@@ -251,3 +251,23 @@ class TestCreatingARuleFromASignal:
         assert "/api/signals/propose?source=system%3Amem_percent" in resp.text
         # The suppressed twin is shown, not silently dropped.
         assert "same event as system:mem_available_mb" in resp.text
+
+
+class TestHealthEndpointCounts:
+    """/api/health read `observation_count` and `memory_count`, but get_stats()
+    returns `observations_count` and `memories_count`, so both reported 0 forever.
+    That made a loop with 46 stored observations look like it had stored none."""
+
+    def test_reports_the_real_observation_count(self, ctx):
+        client, store, _ = ctx
+        for i in range(3):
+            store.add_observation(text=f"obs {i}", observation_type="status",
+                                  confidence=0.9, session_id="s")
+        comps = client.get("/api/health").json()["components"]
+        assert comps["store_observations"] == 3
+
+    def test_reports_the_real_memory_count(self, ctx):
+        client, store, _ = ctx
+        store.add_memory(text="a durable fact", confidence=0.9)
+        comps = client.get("/api/health").json()["components"]
+        assert comps["store_memories"] == 1

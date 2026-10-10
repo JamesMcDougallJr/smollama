@@ -527,8 +527,8 @@ def create_app(
         if store:
             try:
                 stats = store.get_stats()
-                health["components"]["store_observations"] = stats.get("observation_count", 0)
-                health["components"]["store_memories"] = stats.get("memory_count", 0)
+                health["components"]["store_observations"] = stats.get("observations_count", 0)
+                health["components"]["store_memories"] = stats.get("memories_count", 0)
             except Exception as e:
                 health["components"]["store_error"] = str(e)
 
