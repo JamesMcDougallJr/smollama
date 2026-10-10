@@ -25,6 +25,9 @@ pi = ["RPi.GPIO", "gpiozero", "lgpio>=0.2", "adafruit-blinka>=9.0.4", "adafruit-
 memory = ["sqlite-vec>=0.1.7"]
 dashboard = ["fastapi>=0.100.0", "uvicorn>=0.23.0", "jinja2>=3.1.0", "zeroconf>=0.132.0"]
 mem0 = ["httpx[socks]>=0.24.0"]
+# CLIP text-query encoder on the master (frames/text_encoder.py). Without these,
+# frame search silently degrades to LIKE-over-labels and /activity cannot score.
+frames = ["onnxruntime>=1.17", "regex"]
 # Model evaluation: the cloud judge in smollama/evals/judge.py. Only needed to
 # score a run, never to generate one — see docs/model-evaluation.md.
 evals = ["anthropic>=0.69"]

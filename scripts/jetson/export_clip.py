@@ -3,7 +3,7 @@
 
 Run on a desktop (NOT the Nano) with modern Python:
 
-    uv run --with torch --with open_clip_torch --with onnx \
+    uv run --with torch --with open_clip_torch --with onnx --with onnxruntime --with onnxscript \
         python scripts/jetson/export_clip.py --out ~/clip-export
 
 Defaults to MobileCLIP-S1 (512-d, edge-sized, available directly in open_clip).
@@ -47,6 +47,62 @@ def preprocess(img, size: int, mean, std):
     arr = img.astype(np.float32) / 255.0
     arr = (arr - np.asarray(mean, dtype=np.float32)) / np.asarray(std, dtype=np.float32)
     return arr.transpose(2, 0, 1)[None, ...]
+
+
+_PARITY_PROMPTS = [
+    "a photo of a person",
+    "an empty room with nobody in it",
+    "a person standing near a doorway",
+    "a blank dark image",
+]
+
+
+def _finalize_text_encoder(path: Path, model, open_clip, context_length: int) -> bool:
+    """Make the text ONNX self-contained, then prove it loads and matches torch.
+
+    Returns False (and prints why) on any failure. Verification is mandatory, not
+    best-effort: the exporter can write a graph onnxruntime rejects without raising,
+    and the consumer swallows load errors, so an unchecked file fails invisibly.
+    """
+    import numpy as np
+    import torch
+
+    try:
+        import onnx
+        import onnxruntime as ort
+    except ImportError as e:
+        print(f"  ERROR: cannot verify the text encoder, {e.name} missing. "
+              "Re-run with: --with onnx --with onnxruntime --with onnxscript")
+        return False
+
+    # Newer torch writes weights to a sibling .onnx.data file. The runbook scp's
+    # only text_encoder.onnx, so fold them back in (~254 MB, under protobuf's 2 GB).
+    data_file = path.with_name(path.name + ".data")
+    if data_file.exists():
+        onnx.save_model(onnx.load(str(path)), str(path), save_as_external_data=False)
+        data_file.unlink()
+
+    try:
+        sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    except Exception as e:
+        print(f"  ERROR: exported text encoder does not load in onnxruntime: {e}")
+        return False
+
+    tokens = open_clip.tokenize(_PARITY_PROMPTS, context_length=context_length)
+    with torch.no_grad():
+        feats = model.encode_text(tokens)
+        expected = (feats / feats.norm(dim=-1, keepdim=True)).numpy()
+
+    worst = 1.0
+    for i, ids in enumerate(tokens.numpy()):
+        (got,) = sess.run(None, {sess.get_inputs()[0].name: ids[None, :].astype(np.int64)})
+        got = got.reshape(-1).astype(np.float32)
+        worst = min(worst, float(np.dot(got, expected[i])))
+    print(f"  ONNX<->torch text parity, worst of {len(_PARITY_PROMPTS)} (cosine): {worst:.6f}")
+    if worst < 0.999:
+        print("  ERROR: text parity below 0.999, refusing to ship this export")
+        return False
+    return True
 
 
 def main() -> int:
@@ -166,21 +222,34 @@ def main() -> int:
     # are tricky to export; catch the failure and fall back to open_clip at runtime.
     text_opset = max(args.opset, 14)
     print(f"Exporting text encoder (opset {text_opset})...")
+    text_path = out_dir / "text_encoder.onnx"
+    text_ok = False
     try:
+        # Output is NOT called "embedding": the torch dynamo exporter (default from
+        # torch 2.9) also names an internal value "embedding", and the two collide
+        # into an invalid graph ("Duplicate definition of name (embedding)") that
+        # exports without error and only fails when onnxruntime loads it.
         torch.onnx.export(
             TextEncoder(model),
             text_input,
-            str(out_dir / "text_encoder.onnx"),
+            str(text_path),
             input_names=["tokens"],
-            output_names=["embedding"],
+            output_names=["text_embedding"],
             opset_version=text_opset,
-            dynamic_axes={"tokens": {0: "batch"}, "embedding": {0: "batch"}},
+            dynamic_axes={"tokens": {0: "batch"}, "text_embedding": {0: "batch"}},
         )
-        print("  text encoder exported.")
+        text_ok = _finalize_text_encoder(text_path, model, open_clip, context_length)
     except Exception as _te:
-        print(f"  WARNING: text encoder ONNX export failed ({_te.__class__.__name__}: {_te})")
-        print("  The master will use open_clip directly for text encoding (no ONNX needed).")
-        (out_dir / "text_encoder.onnx").unlink(missing_ok=True)
+        print(f"  ERROR: text encoder ONNX export failed ({_te.__class__.__name__}: {_te})")
+
+    if not text_ok:
+        # Never leave a half-valid file behind: ClipTextEncoder degrades silently
+        # to label search when the model fails to load, which hides the problem.
+        for stale in (text_path, out_dir / "text_encoder.onnx.data"):
+            stale.unlink(missing_ok=True)
+        print("  No text_encoder.onnx written — /activity and CLIP text search "
+              "will not work until this export succeeds.")
+        return 1
 
     # The master's vendored tokenizer needs CLIP's BPE vocab; open_clip bundles it
     vocab_src = Path(open_clip.__file__).parent / "bpe_simple_vocab_16e6.txt.gz"

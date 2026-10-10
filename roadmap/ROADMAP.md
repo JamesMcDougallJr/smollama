@@ -17,9 +17,9 @@ Watch what fires on `/rules` and click **Watch** on anything that turns out to b
 normal for this system — an active rule covers the signal, so code tracks it and the
 model stops being asked. Until a signal is covered it costs an inference every cycle.
 
-After that, the cheapest real work is **finishing the `/activity` path** (install
-`onnxruntime`, export `text_encoder.onnx`) — it is two missing artifacts, not a
-design problem, and it silently degrades to LIKE-over-labels today.
+`/activity` scoring works (verified offline against the 500 stored frames) but needs one **agent restart** to load
+`onnxruntime` and the text encoder — until then the running process still degrades to
+LIKE-over-labels.
 
 ## Active
 
@@ -41,7 +41,7 @@ design problem, and it silently degrades to LIKE-over-labels today.
 | `mqtt_bridge_cache.json` rewritten in full per ingest | `readings/mqtt_bridge.py` | O(N²) across N publishing nodes. Free at 11 sources; at ~1000 entries it is throughput and SD-card endurance death. A WAL table fixes it with no new dependency |
 | Local readings stored naive-local, relayed ones tz-aware UTC | `readings/system.py`, `gpio.py`, plugins | Same instant appears 6h apart in `readings_log`. Detectors normalize defensively, but the source should emit tz-aware UTC |
 | Constant-baseline `level_shift` noise | `detectors/core.py` | `load_avg` moving 0 → 0.27 fires. Now **reaches the model and the store** rather than sitting in unused code, so it costs an inference and an observation each time. First thing to check after a day of live cycles |
-| `/activity` cannot score | master node | `onnxruntime` not installed and `~/clip-export/text_encoder.onnx` never exported, so CLIP text search silently falls back to LIKE-over-labels |
+| Jetson `person` labels are false positives | Jetson `jetson_inference` | 474 of 500 stored frames are labelled `person` but show a blurry, overexposed beam of light with no person in it (checked by eye). The CLIP matcher scores all 500 as a distractor (`headlights`) and matches none. Likely a detector threshold or a stuck-label problem, the same family as the stuck `hcsr04`, but `load_series` is numeric-only so no detector can see it |
 | Camera down | Jetson | `gstnvarguscamerasrc: No cameras available`. Needs `scripts/jetson/fix_camera.sh` run with interactive sudo on the device |
 | `known_sources` bounded by retention | `detectors/source.py` | `readings_max_age_days` (7d) prunes the table, so a producer dead longer than that cannot be detected as stale at all |
 

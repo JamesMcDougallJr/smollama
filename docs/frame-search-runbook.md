@@ -32,11 +32,15 @@ Ground rules for all machines:
 Run in the smollama repo on the desktop:
 
 ```bash
-uv run --with torch --with open_clip_torch --with onnx \
+uv run --with torch --with open_clip_torch --with onnx --with onnxruntime --with onnxscript \
     python scripts/jetson/export_clip.py --out ~/clip-export
 ```
 
-**Verify:** the command prints `ONNX↔torch image parity (cosine): 0.99…` and
+**Verify:** the command prints `ONNX<->torch text parity ... 1.000000` and
+`ONNX↔torch image parity (cosine): 0.99…` (it exits non-zero and writes no
+`text_encoder.onnx` if the text check fails — the exporter can emit a graph that
+onnxruntime rejects without raising, and `ClipTextEncoder` swallows load errors),
+and
 `~/clip-export/` contains `image_encoder.onnx`, `text_encoder.onnx`,
 `bpe_simple_vocab_16e6.txt.gz`, `meta.json`, `reference.json`.
 
@@ -51,7 +55,11 @@ ssh llama-master 'mkdir -p ~/clip-export'
 scp ~/clip-export/{text_encoder.onnx,bpe_simple_vocab_16e6.txt.gz} llama-master:~/clip-export/
 ```
 
-⚠️ Every machine must use files from the **same export run**. Mixing exports
+⚠️ Every machine must use files from the **same export run** — or, if you re-export
+only the text tower later, confirm the new `reference.json` matches the Jetson's
+(cosine 1.0 on the same image). Same model + pretrained tag gives the same
+embedding space; the check proves it rather than assuming it. The July Jetson image
+encoder and the October text encoder were paired this way. Mixing exports
 (or models) silently breaks search relevance.
 
 ---
@@ -142,7 +150,7 @@ master drops the messages as its own echo (see jetson-inference.md).
 ## Stage 4 — Master (Raspberry Pi `llama-master`): index + search
 
 ```bash
-uv run uv pip install onnxruntime regex   # text encoder + tokenizer deps
+uv sync --extra frames   # onnxruntime + regex: text encoder + tokenizer deps
 ```
 
 In `config.yaml` (or `config.local.yaml`):
