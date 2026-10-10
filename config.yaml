@@ -34,7 +34,7 @@ plugins:
       enabled: false
       config: {}
     hcsr04:
-      enabled: true
+      enabled: false   # not wired; unwired it reports a phantom 0.0 that reads as a stuck sensor
       config:
         trig_pin: 23
         echo_pin: 24
