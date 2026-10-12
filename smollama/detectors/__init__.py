@@ -3,6 +3,7 @@
 Code detects; the LLM describes. No model is involved in this package.
 """
 
+from .cooldown import SignalCooldown
 from .core import (
     DETECTORS,
     DetectorConfig,
@@ -18,6 +19,7 @@ from .core import (
 )
 
 __all__ = [
+    "SignalCooldown",
     "DETECTORS",
     "DetectorConfig",
     "Sample",

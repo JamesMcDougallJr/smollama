@@ -71,6 +71,7 @@ class Agent:
         self._observation_loop: ObservationLoop | None = None
         self._rules = None
         self._quarantine = None
+        self._cooldown = None
         if not self._is_edge:
             if config.memory.embedding_provider == "ollama":
                 embedder = OllamaEmbeddings(
@@ -94,6 +95,19 @@ class Agent:
                 from .rules import RuleStore
 
                 self._rules = RuleStore(config.memory.db_path)
+
+            # Narration cooldown, also in memory.db so a restart does not re-narrate
+            # everything. Only meaningful on the detector path it gates.
+            if (
+                config.memory.observation_use_detectors
+                and config.memory.observation_signal_cooldown_hours > 0
+            ):
+                from .detectors import SignalCooldown
+
+                self._cooldown = SignalCooldown(
+                    config.memory.db_path,
+                    cooldown_seconds=config.memory.observation_signal_cooldown_hours * 3600,
+                )
 
             # Shares memory.db like the rule store. Built before the loop because the
             # loop filters what it persists through it.
@@ -137,6 +151,7 @@ class Agent:
                     maintenance_every=config.memory.observation_maintenance_every,
                     detector_window_seconds=config.memory.detector_window_hours * 3600,
                     quarantine=self._quarantine,
+                    cooldown=self._cooldown,
                 )
 
         # Initialize frame search (edge relays a camera writer's spool; master
@@ -276,6 +291,9 @@ class Agent:
             self._memory.connect()
             logger.info("Memory store connected")
 
+        if self._cooldown:
+            self._cooldown.connect()
+
         if self._quarantine:
             self._quarantine.connect()
             logger.info(
@@ -401,6 +419,8 @@ class Agent:
             self._rules.close()
         if self._quarantine:
             self._quarantine.close()
+        if self._cooldown:
+            self._cooldown.close()
         if self._frames:
             self._frames.close()
 

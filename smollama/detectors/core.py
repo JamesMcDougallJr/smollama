@@ -334,18 +334,23 @@ CORRELATED_METRICS: dict[str, str] = {
 }
 
 
-def _correlation_key(signal: "Signal") -> tuple | None:
+def correlation_group(source: str, detector: str) -> tuple | None:
     """(node prefix, group, detector) for a correlated metric, else None.
 
     Direction is deliberately excluded. The memory pair moves in opposite
     directions by definition, so keying on it would fail to group exactly the case
-    this exists for.
+    this exists for. Shared with the narration cooldown so both agree on what counts
+    as one event.
     """
-    prefix, _, metric = signal.source.rpartition(":")
+    prefix, _, metric = source.rpartition(":")
     group = CORRELATED_METRICS.get(metric)
     if group is None:
         return None
-    return (prefix, group, signal.detector)
+    return (prefix, group, detector)
+
+
+def _correlation_key(signal: "Signal") -> tuple | None:
+    return correlation_group(signal.source, signal.detector)
 
 
 def dedupe_correlated(signals: list["Signal"]) -> list["Signal"]:

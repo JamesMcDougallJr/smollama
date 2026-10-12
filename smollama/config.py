@@ -128,6 +128,12 @@ class MemoryConfig:
     # level shift is only a shift relative to a long baseline, and staleness needs
     # to look back further than a reading interval. Capped by readings_max_age_days.
     detector_window_hours: int = 168
+    # Don't re-narrate an unchanged signal for this long. Without it an uncovered
+    # signal costs a model call and a stored observation every cycle, forever:
+    # measured at 58 near-identical observations in 23 hours. A direction flip, a
+    # score escalation of 1.5x, or the signal clearing and returning counts as new.
+    # 0 disables it. Only applies when observation_use_detectors is on.
+    observation_signal_cooldown_hours: float = 12.0
     # Let the agent stop storing a source whose readings are one unchanging value
     # (a dead or unplugged sensor). Off removes the tools from the model entirely.
     # Evidence is recomputed in code and a changing source is always refused; see
@@ -623,6 +629,10 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 detector_window_hours=mem_data.get(
                     "detector_window_hours",
                     config.memory.detector_window_hours,
+                ),
+                observation_signal_cooldown_hours=mem_data.get(
+                    "observation_signal_cooldown_hours",
+                    config.memory.observation_signal_cooldown_hours,
                 ),
                 quarantine_enabled=mem_data.get(
                     "quarantine_enabled", config.memory.quarantine_enabled

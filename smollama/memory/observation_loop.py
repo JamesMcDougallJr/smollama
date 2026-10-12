@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from ..detectors import DetectorConfig, Signal, dedupe_correlated, detect_all
+from ..detectors import DetectorConfig, Signal, SignalCooldown, dedupe_correlated, detect_all
 from ..detectors.source import known_sources, load_series
 from ..readings import ReadingManager
 from ..rules import apply_maintenance, uncovered_signals
@@ -201,6 +201,7 @@ class ObservationLoop:
         detector_config: DetectorConfig | None = None,
         detector_window_seconds: float = 604800.0,
         quarantine: "QuarantineStore | None" = None,
+        cooldown: SignalCooldown | None = None,
     ):
         """Initialize the observation loop.
 
@@ -234,6 +235,9 @@ class ObservationLoop:
             quarantine: Sources whose data was judged invalid. They are still read
                         every cycle, but their repeats are not persisted and
                         signals about them are not narrated. See quarantine.py.
+            cooldown: Suppresses re-narrating an unchanged signal. Without it an
+                      uncovered signal costs a model call and an observation every
+                      cycle, forever. See detectors/cooldown.py.
             detector_window_seconds: History window detectors see. Deliberately much
                                      wider than lookback_minutes — a level shift is
                                      only a shift relative to a long baseline.
@@ -260,6 +264,8 @@ class ObservationLoop:
         self._detector_config = detector_config or DetectorConfig()
         self._detector_window = detector_window_seconds
         self._quarantine = quarantine
+        self._cooldown = cooldown
+        self._detection_ok = True
         self._cycles_since_maintenance = 0
 
         # Verified against Ollama: with tools AND a schema, the model emitted zero
@@ -407,6 +413,7 @@ class ObservationLoop:
         # still being evaluated); only narration is restricted to unclaimed sources.
         signals = self._run_detection() if self._use_detectors else []
         self._record_rule_evaluations(signals)
+        self._forget_cleared_signals(signals)
 
         # 4. Partition readings between domains and the generic pass.
         # A domain is active when it claims any current or recent reading
@@ -468,15 +475,32 @@ class ObservationLoop:
         db = str(self._store.db_path)
         try:
             series = load_series(db, window_seconds=self._detector_window, now=now)
-            return detect_all(
+            found = detect_all(
                 series,
                 now=now,
                 config=self._detector_config,
                 expected_sources=known_sources(db),
             )
+            self._detection_ok = True
+            return found
         except Exception as e:
             logger.error("Detection pass failed: %s", e, exc_info=True)
+            self._detection_ok = False
             return []
+
+    def _forget_cleared_signals(self, signals: list[Signal]) -> None:
+        """Let the cooldown drop signals that stopped firing, so a recurrence is new.
+
+        Skipped after a failed detection pass: that returns no signals, which looks
+        exactly like "everything cleared" and would re-narrate everything once the
+        error passed.
+        """
+        if self._cooldown is None or not self._detection_ok:
+            return
+        try:
+            self._cooldown.forget_cleared({(s.source, s.detector) for s in signals})
+        except Exception as e:
+            logger.warning("Could not prune the signal cooldown: %s", e)
 
     def _record_rule_evaluations(self, signals: list[Signal]) -> None:
         """Count this cycle against every active rule, fired or not.
@@ -548,6 +572,14 @@ class ObservationLoop:
         # detect_all so rule evaluation above still saw every signal.
         signals = dedupe_correlated(signals)
 
+        # Then drop unchanged repeats. After dedup so the winner of a correlated pair
+        # is judged once, and the twin is covered by the winner's record.
+        if self._cooldown is not None:
+            signals = self._cooldown.filter(signals)
+            if not signals:
+                logger.debug("Every signal is inside its cooldown — no model call")
+                return
+
         # dedupe_correlated sorts, but sort here too so max_signals truncation is
         # correct no matter where the list came from.
         top = sorted(signals, key=lambda s: s.score, reverse=True)[: self._max_signals]
@@ -576,12 +608,22 @@ class ObservationLoop:
         # would credit feedback to sources that had nothing to do with the finding.
         # A stale signal has no current reading at all, which is correct — absence
         # is the finding.
-        await self._query_and_store(
+        answered = await self._query_and_store(
             prompt,
             [r for r in readings if r.full_id in flagged],
             pass_name="detectors",
             attribute_to=flagged,
         )
+
+        # Recorded only once the model really answered, and only for the signals it
+        # was actually shown: one cut by max_signals was never reported and must be
+        # eligible next cycle. A clean answer with nothing to say still counts;
+        # otherwise a signal the model declines to describe is re-asked forever.
+        if answered and self._cooldown is not None:
+            try:
+                self._cooldown.record(top)
+            except Exception as e:
+                logger.warning("Could not record narrated signals: %s", e)
 
     async def _run_generic_pass(
         self,
@@ -646,8 +688,13 @@ class ObservationLoop:
         readings: list,
         pass_name: str,
         attribute_to: set[str] | None = None,
-    ) -> None:
-        """Run the LLM query for one pass and store the parsed results."""
+    ) -> bool:
+        """Run the LLM query for one pass and store the parsed results.
+
+        Returns True only if the model answered and the answer parsed. Callers that
+        gate on having reported something (the signal cooldown) must not treat a
+        failed or garbled answer as handled.
+        """
         input_snapshot = [
             {
                 "full_id": r.full_id,
@@ -679,9 +726,9 @@ class ObservationLoop:
                     f"No response from LLM for {pass_name} observation pass "
                     "- operating in degraded mode"
                 )
-                return
+                return False
 
-            await self._process_response(
+            return await self._process_response(
                 response, self.session_id, input_snapshot,
                 attribute_to=attribute_to,
             )
@@ -689,6 +736,7 @@ class ObservationLoop:
         except Exception as e:
             logger.error(f"LLM query failed during {pass_name} observation pass: {e}")
             # Continue loop - sensor logging already completed
+            return False
 
     @staticmethod
     def _get_free_memory_mb() -> float:
@@ -822,8 +870,11 @@ class ObservationLoop:
         session_id: str,
         input_snapshot: list[dict],
         attribute_to: set[str] | None = None,
-    ) -> None:
+    ) -> bool:
         """Parse LLM response and store observations/memories.
+
+        Returns True if the response parsed and was processed, False if it was
+        discarded or failed — even an empty `observations` list is True.
 
         `attribute_to` is the set of sources the pass is actually about. When given,
         the model's `related_sources` is filtered to it and falls back to it when
@@ -867,6 +918,8 @@ class ObservationLoop:
                 )
                 logger.info(f"Stored memory: {mem['fact'][:50]}...")
 
+            return True
+
         except json.JSONDecodeError:
             # Do NOT fall back to storing the raw text. An unparseable response
             # means the model didn't do the task, and its output is usually a
@@ -881,8 +934,10 @@ class ObservationLoop:
                 len(response or ""),
                 (response or "")[:120].replace("\n", " "),
             )
+            return False
         except Exception as e:
             logger.error(f"Failed to process observation response: {e}")
+            return False
 
     async def run_once(self) -> None:
         """Run a single observation cycle (useful for testing)."""

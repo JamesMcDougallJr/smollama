@@ -18,6 +18,7 @@ All keys live under `memory:` in `config.yaml` / `cluster.yaml`.
 | `observation_max_signals` | `3` | Most findings described in one cycle, highest score first. |
 | `observation_maintenance_every` | `10` | Run rule lifecycle maintenance once per this many cycles. `0` disables. |
 | `detector_window_hours` | `168` | History the detectors see, independent of `observation_lookback_minutes`. |
+| `observation_signal_cooldown_hours` | `12` | Don't re-narrate an unchanged signal for this long. `0` disables. |
 | `quarantine_enabled` | `true` | Give the agent tools to stop storing a source with invalid data. Off removes them from the model entirely. |
 | `quarantine_max_sources` | `10` | Most sources stopped at once. |
 | `quarantine_min_samples` | `30` | Identical consecutive readings required before a source qualifies. |
@@ -61,6 +62,34 @@ rather than trusting the model to copy an identifier — `qwen2.5:1.5b` returned
 `system:cpu_temp` for a case that never mentioned it, and `system:hcsr04` for
 `hcsr04:distance`. That field decides what later keep/dismiss feedback is attributed
 to, so a wrong one teaches the system about an unrelated source.
+
+## Not saying the same thing every cycle
+
+A signal that nothing covers used to cost one model call and one stored observation per
+cycle, forever. Measured on the live master: the stuck `hcsr04` flatline produced 58
+near-identical observations in 23 hours. The prompt already asks the model to omit a
+deviation a past observation reports, and `qwen2.5:1.5b` does not honour that, so the
+suppression is in code (`detectors/cooldown.py`).
+
+An unchanged signal is not narrated again for `observation_signal_cooldown_hours`. It is
+treated as new if:
+
+- it **cleared and came back** (a cycle where it was absent resets it)
+- its **direction flipped**
+- its **score rose 1.5x or more** since it was narrated
+
+and it is *not* treated as new when the winner of a correlated pair swaps
+(`mem_percent` and `mem_available_mb` are one event), because narrating one also covers
+its twin.
+
+Two rules keep this from hiding things. A signal is only marked narrated **after the model
+answered and the answer parsed**, so an LLM outage or garbled output never silences it. And
+a signal cut by `observation_max_signals` was never shown to the model, so it stays
+eligible next cycle. A clean answer with nothing to report does count, otherwise a signal
+the model declines to describe is re-asked forever.
+
+The cooldown is persisted in `memory.db`, so restarting the service does not re-narrate
+everything. It gates narration only: rules still evaluate every signal.
 
 ## Stopping a source that reports invalid data
 
