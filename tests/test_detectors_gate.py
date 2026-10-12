@@ -104,22 +104,45 @@ class TestLoaderHandlesMixedTimestampFrames:
 # ── The gate ────────────────────────────────────────────────────────────────
 
 
-@live_only
+FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "hcsr04_stuck_series.json")
+
+# Pinned so the fixture never ages out of load_series' 7-day window. The capture spans
+# 14:46 UTC on 2026-10-04 to 14:26 UTC on 2026-10-11, so this must sit after the last
+# reading yet within 7 days of the first, or the oldest rows fall outside the window.
+FIXTURE_NOW = datetime(2026, 10, 11, 14, 30, tzinfo=timezone.utc)
+
+
+def _stuck_series():
+    """The real stuck-sensor readings, loaded through the real loader."""
+    import json
+
+    with open(FIXTURE) as f:
+        data = json.load(f)
+    path = _write_db([(data["source"], t, v) for t, v in data["samples"]])
+    return load_series(path, now=FIXTURE_NOW)
+
+
 class TestGateStuckSensor:
     """Production failure 1: hcsr04:distance pinned at exactly 0.0.
 
-    486 real readings, min=max=avg=0.0. The observation loop ran over this data
-    for weeks and never reported it.
+    480 real readings, min=max=avg=0.0, from an HC-SR04 with nothing on its echo pin.
+    The observation loop ran over this data for weeks and never reported it.
+
+    Replays a committed capture rather than the live database. These tests used to
+    read ~/.smollama/memory.db and skip when hcsr04 was absent, which silently dropped
+    the suite's flagship regression the moment the phantom rows were purged.
     """
 
-    def test_flatline_fires_on_the_real_series(self):
-        series = load_series(LIVE_DB)
-        samples = series.get("hcsr04:distance")
-        if not samples:
-            pytest.skip("hcsr04:distance not present in this readings_log")
+    def test_the_fixture_is_the_real_series(self):
+        """Guards the guard: an empty or varying fixture would make the rest vacuous."""
+        samples = _stuck_series()["hcsr04:distance"]
+        assert len(samples) == 480
+        assert {s.value for s in samples} == {0.0}
 
+    def test_flatline_fires_on_the_real_series(self):
+        samples = _stuck_series()["hcsr04:distance"]
         signal = detect_flatline(
-            samples, now=datetime.now(timezone.utc), config=DetectorConfig(),
+            samples, now=FIXTURE_NOW, config=DetectorConfig(),
             source="hcsr04:distance",
         )
         assert signal is not None, "flatline missed a sensor pinned at one value"
@@ -127,12 +150,9 @@ class TestGateStuckSensor:
         assert signal.sample_count >= 10
 
     def test_signal_detail_is_usable_verbatim(self):
-        series = load_series(LIVE_DB)
-        samples = series.get("hcsr04:distance")
-        if not samples:
-            pytest.skip("hcsr04:distance not present")
+        samples = _stuck_series()["hcsr04:distance"]
         signal = detect_flatline(
-            samples, now=datetime.now(timezone.utc), config=DetectorConfig(),
+            samples, now=FIXTURE_NOW, config=DetectorConfig(),
             source="hcsr04:distance",
         )
         # The detail line is handed straight to the model, so it must name the
@@ -142,11 +162,7 @@ class TestGateStuckSensor:
         assert str(signal.sample_count) in signal.detail
 
     def test_appears_in_a_full_detection_pass(self):
-        now = datetime.now(timezone.utc)
-        series = load_series(LIVE_DB)
-        if "hcsr04:distance" not in series:
-            pytest.skip("hcsr04:distance not present")
-        signals = detect_all(series, now=now, config=DetectorConfig())
+        signals = detect_all(_stuck_series(), now=FIXTURE_NOW, config=DetectorConfig())
         flagged = {(s.source, s.detector) for s in signals}
         assert ("hcsr04:distance", "flatline") in flagged
 
