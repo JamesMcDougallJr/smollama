@@ -134,6 +134,16 @@ class MemoryConfig:
     # score escalation of 1.5x, or the signal clearing and returning counts as new.
     # 0 disables it. Only applies when observation_use_detectors is on.
     observation_signal_cooldown_hours: float = 12.0
+    # Merge near-duplicate memories once per this many observation cycles. Write-time
+    # dedupe in add_memory only compares a NEW fact against what is stored, so it can
+    # never catch what is already there — the corpus reached 2,466 rows paraphrasing a
+    # few hundred facts. 0 disables the sweep.
+    consolidate_memories_every: int = 10
+    # Similarity at which two memories are the same fact. Calibrated by reading real
+    # pairs per band: at 0.85+ both sides say the same thing; by 0.78 genuinely
+    # different facts merge (inference activity vs. temperature).
+    memory_merge_threshold: float = 0.85
+    memory_max_merges: int = 200   # cap per sweep so a cycle is never stalled
     # Let the agent stop storing a source whose readings are one unchanging value
     # (a dead or unplugged sensor). Off removes the tools from the model entirely.
     # Evidence is recomputed in code and a changing source is always refused; see
@@ -633,6 +643,16 @@ def load_config(config_path: str | Path | None = None) -> Config:
                 observation_signal_cooldown_hours=mem_data.get(
                     "observation_signal_cooldown_hours",
                     config.memory.observation_signal_cooldown_hours,
+                ),
+                consolidate_memories_every=mem_data.get(
+                    "consolidate_memories_every",
+                    config.memory.consolidate_memories_every,
+                ),
+                memory_merge_threshold=mem_data.get(
+                    "memory_merge_threshold", config.memory.memory_merge_threshold
+                ),
+                memory_max_merges=mem_data.get(
+                    "memory_max_merges", config.memory.memory_max_merges
                 ),
                 quarantine_enabled=mem_data.get(
                     "quarantine_enabled", config.memory.quarantine_enabled

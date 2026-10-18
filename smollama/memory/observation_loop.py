@@ -202,6 +202,9 @@ class ObservationLoop:
         detector_window_seconds: float = 604800.0,
         quarantine: "QuarantineStore | None" = None,
         cooldown: SignalCooldown | None = None,
+        consolidate_memories_every: int = 0,
+        memory_merge_threshold: float = 0.85,
+        memory_max_merges: int = 200,
     ):
         """Initialize the observation loop.
 
@@ -235,6 +238,11 @@ class ObservationLoop:
             quarantine: Sources whose data was judged invalid. They are still read
                         every cycle, but their repeats are not persisted and
                         signals about them are not narrated. See quarantine.py.
+            consolidate_memories_every: Merge near-duplicate memories once per this
+                       many cycles. 0 disables. Write-time dedupe cannot catch what is
+                       already stored, so without this the corpus only grows.
+            memory_merge_threshold: Similarity above which two memories are one fact.
+            memory_max_merges: Cap per sweep, so a cycle is never stalled by it.
             cooldown: Suppresses re-narrating an unchanged signal. Without it an
                       uncovered signal costs a model call and an observation every
                       cycle, forever. See detectors/cooldown.py.
@@ -265,6 +273,10 @@ class ObservationLoop:
         self._detector_window = detector_window_seconds
         self._quarantine = quarantine
         self._cooldown = cooldown
+        self._consolidate_every = consolidate_memories_every
+        self._merge_threshold = memory_merge_threshold
+        self._max_merges = memory_max_merges
+        self._cycles_since_consolidation = 0
         self._detection_ok = True
         self._cycles_since_maintenance = 0
 
@@ -451,6 +463,7 @@ class ObservationLoop:
 
         # 6. Lifecycle maintenance, on a slower cadence than observation.
         self._maybe_run_maintenance()
+        self._maybe_consolidate_memories()
 
     async def _run_unclaimed_pass(
         self,
@@ -520,6 +533,27 @@ class ObservationLoop:
                 self._rules.record_evaluation(rule.id, fired=rule.identity in fired)
             except Exception as e:
                 logger.warning("Could not record evaluation for rule %s: %s", rule.id, e)
+
+    def _maybe_consolidate_memories(self) -> None:
+        """Merge near-duplicate memories, on a slower cadence than observation.
+
+        The second half of dedupe: `add_memory` only compares a *new* fact against
+        what is stored, which by construction cannot catch anything already there.
+        Without this the corpus only grows — it reached 2,466 rows paraphrasing a few
+        hundred facts, all sitting just under the write-time bar.
+        """
+        if self._consolidate_every <= 0:
+            return
+        self._cycles_since_consolidation += 1
+        if self._cycles_since_consolidation < self._consolidate_every:
+            return
+        self._cycles_since_consolidation = 0
+        try:
+            self._store.consolidate_memories(
+                threshold=self._merge_threshold, max_merges=self._max_merges
+            )
+        except Exception as e:
+            logger.error("Memory consolidation failed: %s", e, exc_info=True)
 
     def _maybe_run_maintenance(self) -> None:
         """Apply deterministic lifecycle transitions once per N cycles."""

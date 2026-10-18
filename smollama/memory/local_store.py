@@ -824,6 +824,126 @@ class LocalStore:
             })
         return results
 
+    def consolidate_memories(
+        self,
+        threshold: float = 0.85,
+        max_merges: int = 200,
+        block: int = 256,
+    ) -> dict[str, int]:
+        """Merge near-duplicate memories into their most-reinforced row.
+
+        The other half of dedupe. `add_memory` compares a *new* fact against what is
+        stored, which cannot help anything already there: a row only survived because
+        it scored below that bar at the time, so no surviving pair can exceed it. On
+        the live store that left 2,466 rows paraphrasing a few hundred facts, with a
+        maximum nearest-neighbour similarity of exactly 0.900.
+
+        Threshold chosen by reading real pairs per similarity band, not cluster counts:
+        at 0.85 and above both sides say the same thing ("memory around 80.2%" /
+        "memory (80.4%) is a frequently observed state"); by 0.78 genuinely different
+        facts merge ("Jetson shows low inference activity" / "Jetson temperatures
+        around 58.5-60.0C"). Hence 0.85.
+
+        Merging is against a *seed*, never transitive. Single-linkage chaining would
+        let A~B and B~C pull together an A and C that are not alike, which is how a
+        sweep silently destroys facts. Seeds are taken most-reinforced first, so the
+        canonical phrasing is the one the system has confirmed most often.
+
+        Bounded by `max_merges` because this runs inside an observation cycle, and
+        scored in row blocks so peak memory stays O(block x N) rather than O(N^2) —
+        at 50k memories a full matrix would be 10 GB.
+
+        Returns {"scanned", "groups", "merged", "remaining"}.
+        """
+        import numpy as np
+
+        if not self._vec_available:
+            return {"scanned": 0, "groups": 0, "merged": 0, "remaining": 0}
+
+        conn = self._ensure_connected()
+        rows = conn.execute(
+            """
+            SELECT m.id, m.times_confirmed, v.embedding
+            FROM memories m
+            JOIN memories_vec v ON v.memory_id = m.id
+            WHERE m.active = 1
+            ORDER BY m.times_confirmed DESC, m.id ASC
+            """
+        ).fetchall()
+        total = len(rows)
+        if total < 2:
+            return {"scanned": total, "groups": 0, "merged": 0, "remaining": total}
+
+        ids = np.array([r["id"] for r in rows])
+        vecs = np.stack([np.frombuffer(r["embedding"], dtype=np.float32) for r in rows])
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        vecs = vecs / norms
+
+        absorbed_by: dict[int, list[int]] = {}
+        claimed = np.zeros(total, dtype=bool)
+        merged = 0
+
+        for start in range(0, total, block):
+            if merged >= max_merges:
+                break
+            sims = vecs[start:start + block] @ vecs.T
+            for offset in range(sims.shape[0]):
+                i = start + offset
+                if claimed[i] or merged >= max_merges:
+                    continue
+                row = sims[offset]
+                row[i] = -1.0  # never absorb the seed into itself
+                candidates = np.flatnonzero((row >= threshold) & ~claimed)
+                if candidates.size == 0:
+                    continue
+                # Rows are ordered by times_confirmed, so the seed is already the most
+                # reinforced of its group; take the rest in that same order.
+                take = [int(j) for j in candidates[: max_merges - merged]]
+                if not take:
+                    continue
+                claimed[take] = True
+                claimed[i] = True
+                absorbed_by[int(ids[i])] = [int(ids[j]) for j in take]
+                merged += len(take)
+
+        for survivor_id, gone in absorbed_by.items():
+            placeholders = ",".join("?" * len(gone))
+            extra, best_conf = conn.execute(
+                f"SELECT COALESCE(SUM(times_confirmed), 0), COALESCE(MAX(confidence), 0) "
+                f"FROM memories WHERE id IN ({placeholders})",
+                gone,
+            ).fetchone()
+            conn.execute(
+                """
+                UPDATE memories
+                SET times_confirmed = times_confirmed + ?,
+                    confidence = MAX(confidence, ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (extra, best_conf, datetime.now().isoformat(), survivor_id),
+            )
+            # Vectors go too: an orphaned vec row keeps matching searches for a
+            # memory that no longer exists.
+            conn.execute(
+                f"DELETE FROM memories_vec WHERE memory_id IN ({placeholders})", gone
+            )
+            conn.execute(f"DELETE FROM memories WHERE id IN ({placeholders})", gone)
+
+        conn.commit()
+        if merged:
+            logger.info(
+                "Memory consolidation: merged %d rows into %d (scanned %d, %d remain)",
+                merged, len(absorbed_by), total, total - merged,
+            )
+        return {
+            "scanned": total,
+            "groups": len(absorbed_by),
+            "merged": merged,
+            "remaining": total - merged,
+        }
+
     def deactivate_memory(self, memory_id: int) -> bool:
         """Mark a memory as inactive.
 

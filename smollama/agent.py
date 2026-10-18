@@ -152,6 +152,9 @@ class Agent:
                     detector_window_seconds=config.memory.detector_window_hours * 3600,
                     quarantine=self._quarantine,
                     cooldown=self._cooldown,
+                    consolidate_memories_every=config.memory.consolidate_memories_every,
+                    memory_merge_threshold=config.memory.memory_merge_threshold,
+                    memory_max_merges=config.memory.memory_max_merges,
                 )
 
         # Initialize frame search (edge relays a camera writer's spool; master
