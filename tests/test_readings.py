@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, AsyncMock, patch, mock_open
 
 from smollama.timeutil import utc_now_epoch
@@ -18,6 +18,55 @@ from smollama.readings import (
 )
 from smollama.config import GPIOConfig, GPIOPinConfig
 from smollama.gpio_reader import GPIOReader
+
+
+class TestReadingTimestampsAreAlwaysUtc:
+    """Every Reading carries a tz-aware UTC timestamp, whoever built it.
+
+    Local providers called datetime.now() (naive local) while relayed edge readings
+    arrived tz-aware UTC, so readings_log held both: 2,480 naive rows against 2,565
+    aware ones, with the same instant appearing 6 hours apart depending on the
+    producer. Downstream code normalized defensively in several places, which is the
+    symptom — the fix belongs at construction, where it cannot be forgotten by the
+    next plugin someone writes.
+    """
+
+    def test_a_naive_timestamp_becomes_aware(self):
+        r = Reading("system", "cpu_temp", 48.0, datetime(2026, 10, 18, 12, 0, 0))
+        assert r.timestamp.tzinfo is not None
+        assert r.timestamp.utcoffset() == timedelta(0)
+
+    def test_the_instant_is_preserved_not_relabelled(self):
+        """Naive means local here, so stamping it UTC would shift it by the offset —
+        exactly the 6-hour discrepancy this is fixing."""
+        naive = datetime(2026, 10, 18, 12, 0, 0)
+        r = Reading("system", "cpu_temp", 48.0, naive)
+        assert r.timestamp == naive.astimezone(timezone.utc)
+
+    def test_an_aware_utc_timestamp_is_untouched(self):
+        aware = datetime(2026, 10, 18, 18, 0, 0, tzinfo=timezone.utc)
+        assert Reading("system", "cpu_temp", 48.0, aware).timestamp == aware
+
+    def test_a_non_utc_timestamp_is_converted(self):
+        other = datetime(2026, 10, 18, 18, 0, 0, tzinfo=timezone(timedelta(hours=5)))
+        r = Reading("system", "cpu_temp", 48.0, other)
+        assert r.timestamp.utcoffset() == timedelta(0)
+        assert r.timestamp == other.astimezone(timezone.utc)
+
+    def test_the_log_dict_carries_an_offset(self):
+        """readings_log is the table that held both shapes; what lands there must be
+        unambiguous."""
+        r = Reading("system", "cpu_temp", 48.0, datetime(2026, 10, 18, 12, 0, 0))
+        assert r.to_log_dict()["timestamp"].endswith("+00:00")
+
+    @pytest.mark.asyncio
+    async def test_every_builtin_provider_emits_aware_timestamps(self):
+        """The point of fixing it at construction: no provider can opt out."""
+        from smollama.readings import SystemReadingProvider
+
+        for reading in await SystemReadingProvider().read_all():
+            assert reading.timestamp.tzinfo is not None, reading.full_id
+            assert reading.timestamp.utcoffset() == timedelta(0), reading.full_id
 
 
 class TestReadingDataclass:
@@ -78,7 +127,10 @@ class TestReadingDataclass:
         assert log_dict["source_id"] == "cpu_temp"
         assert log_dict["full_id"] == "system:cpu_temp"
         assert log_dict["value"] == 45.5
-        assert log_dict["timestamp"] == now.isoformat()
+        # Not now.isoformat(): a naive timestamp is normalized to tz-aware UTC at
+        # construction, so the stored string carries an offset while naming the same
+        # instant. See TestReadingTimestampsAreAlwaysUtc.
+        assert log_dict["timestamp"] == now.astimezone(timezone.utc).isoformat()
         assert log_dict["unit"] == "celsius"
         assert log_dict["metadata"] == {"zone": "thermal_zone0"}
 

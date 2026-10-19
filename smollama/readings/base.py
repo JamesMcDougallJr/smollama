@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
+from ..timeutil import normalize_ts
+
 if TYPE_CHECKING:
     from smollama.plugins.loader import PluginLoader
 
@@ -19,6 +21,21 @@ class Reading:
     timestamp: datetime  # When the reading was taken
     unit: str | None = None  # Optional unit: "celsius", "percent", "boolean"
     metadata: dict | None = None  # Additional context
+
+    def __post_init__(self) -> None:
+        """Pin every timestamp to tz-aware UTC, whatever the producer supplied.
+
+        Local providers used datetime.now() (naive local) while relayed edge readings
+        arrived tz-aware UTC, so readings_log carried both — the same instant 6 hours
+        apart depending on which side produced it. Normalising here rather than in
+        each of the 15 construction sites means a future plugin cannot reintroduce it,
+        and downstream code stops having to defend against the mix.
+
+        A naive value is read as local time, matching datetime.timestamp(), so the
+        instant is preserved rather than relabelled.
+        """
+        if isinstance(self.timestamp, datetime):
+            self.timestamp = normalize_ts(self.timestamp)
 
     @property
     def full_id(self) -> str:
