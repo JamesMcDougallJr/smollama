@@ -233,11 +233,24 @@ class TestGateNoiseFloor:
         if not series:
             pytest.skip("empty readings_log")
         signals = detect_all(series, now=now, config=DetectorConfig())
-        # Not zero (the stuck sensor is real), and not one-per-source-per-detector.
-        assert signals, "no signals at all on real data"
+        # Bounded, not non-empty. This used to assert `signals` was non-empty on the
+        # grounds that "the stuck sensor is real" — which quietly made a healthy
+        # system a test failure, and tied the suite to whatever happens to be broken
+        # in one machine's database. Silence is the correct output for a healthy
+        # system; noise is the failure this gate exists to catch.
         assert len(signals) <= len(series) * 2, (
             f"{len(signals)} signals across {len(series)} sources — too noisy to review"
         )
+        # One detector firing on every single source at once is the shape of a
+        # systematic false positive, which is what a 15-minute staleness bar did to a
+        # 20-minute logging cadence: all 8 sources stale, every cycle.
+        from collections import Counter
+        per_detector = Counter(s.detector for s in signals)
+        for detector, count in per_detector.items():
+            assert count < len(series), (
+                f"{detector} fired on {count} of {len(series)} sources — that is a "
+                "systematic false positive, not a finding"
+            )
 
     def test_signals_are_ranked_highest_first(self):
         now = datetime.now(timezone.utc)

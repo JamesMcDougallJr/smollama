@@ -53,8 +53,19 @@ class DetectorConfig:
 
     # flatline: zero spread over at least this many samples
     flatline_min_samples: int = 10
-    # stale: no reading for longer than this
+    # stale: a source is overdue past whichever is larger — this floor, or
+    # `stale_interval_multiple` x the cadence the source actually achieves.
+    #
+    # The floor alone was wrong in production. Readings are logged once per
+    # observation cycle (20 minutes here), so every source's median inter-arrival gap
+    # was 20.2 minutes against this 15-minute bar, and all eight fired `stale` every
+    # cycle — crowding out real findings at max_signals=3. Cadence varies by
+    # deployment and by source, so it is measured per source rather than configured.
+    # The floor still protects sources that report far faster than the loop, where
+    # 3x their gap would be a hair trigger.
     stale_after_seconds: float = 900.0
+    stale_interval_multiple: float = 3.0
+    stale_min_samples_for_cadence: int = 5
     # level_shift: the last N samples against a longer baseline.
     # Deliberately a sample COUNT, not a duration: reading cadence varies by
     # deployment (this system logs roughly every 20 minutes, so a 5-minute
@@ -125,6 +136,23 @@ def detect_flatline(samples, *, now, config, source: str = "") -> Signal | None:
     )
 
 
+def _expected_interval(nums, config) -> float:
+    """Seconds a source is allowed to go quiet, from the cadence it actually keeps.
+
+    Returns the configured floor when there is too little history to measure a
+    cadence — two readings cannot establish one, and guessing from them would make
+    the detector fire on its own cold start.
+    """
+    if len(nums) < config.stale_min_samples_for_cadence:
+        return config.stale_after_seconds
+    stamps = [normalize_ts(s.ts) for s in nums]
+    gaps = [(b - a).total_seconds() for a, b in zip(stamps, stamps[1:])]
+    typical = median(gaps)
+    if not typical or typical <= 0:
+        return config.stale_after_seconds
+    return max(config.stale_after_seconds, typical * config.stale_interval_multiple)
+
+
 def detect_stale(samples, *, now, config, source: str = "") -> Signal | None:
     """No recent reading — a dead producer.
 
@@ -150,13 +178,15 @@ def detect_stale(samples, *, now, config, source: str = "") -> Signal | None:
 
     last = normalize_ts(nums[-1].ts)
     gap = (now - last).total_seconds()
-    if gap <= config.stale_after_seconds:
+    expected = _expected_interval(nums, config)
+    if gap <= expected:
         return None
 
     hours = gap / 3600.0
     # Log-ish growth: a 19-day silence should outrank a 20-minute one without
-    # dwarfing every other signal by four orders of magnitude.
-    score = min(5.0, 1.0 + (gap / config.stale_after_seconds) ** 0.3)
+    # dwarfing every other signal by four orders of magnitude. Scored against the
+    # source's own expectation, so "late" means late for *this* source.
+    score = min(5.0, 1.0 + (gap / expected) ** 0.3)
     return Signal(
         source=source,
         detector="stale",
@@ -165,7 +195,7 @@ def detect_stale(samples, *, now, config, source: str = "") -> Signal | None:
         detail=(
             f"{source or 'source'} last reported {hours:.1f}h ago "
             f"(value {nums[-1].value}); expected at least every "
-            f"{config.stale_after_seconds / 60:.0f} minutes."
+            f"{expected / 60:.0f} minutes."
         ),
         first_seen=last,
         value=nums[-1].value,

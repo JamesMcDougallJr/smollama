@@ -141,6 +141,73 @@ class TestStale:
         assert s is None, "naive local timestamp misread as stale"
 
 
+class TestStaleUsesEachSourcesOwnCadence:
+    """The fixed 15-minute bar made every source permanently stale.
+
+    Measured on the live master: readings are logged once per 20-minute observation
+    cycle, so every source's median inter-arrival gap is 20.2 minutes against a
+    900-second threshold. All eight sources fired `stale` every cycle, and with
+    max_signals=3 they crowded out every real finding. "Every source is its own
+    baseline" has to apply to cadence too, not just to values.
+    """
+
+    def minutely(self, count, gap_minutes, last_seen_minutes_ago):
+        step = timedelta(minutes=gap_minutes)
+        end = NOW - timedelta(minutes=last_seen_minutes_ago)
+        return [Sample(ts=end - step * (count - 1 - i), value=1.0) for i in range(count)]
+
+    def test_a_20_minute_source_is_not_stale_18_minutes_in(self):
+        """The live false positive: inside its own normal cadence."""
+        samples = self.minutely(40, 20, 18)
+        assert detect_stale(samples, now=NOW, config=DetectorConfig()) is None
+
+    def test_the_same_source_is_stale_after_90_minutes(self):
+        """Well past 3x its own 20-minute cadence."""
+        s = detect_stale(self.minutely(40, 20, 90), now=NOW, config=DetectorConfig())
+        assert s is not None and s.direction == "absent"
+
+    def test_the_detail_quotes_the_derived_expectation(self):
+        """Saying "expected every 15 minutes" about a 20-minute source is a lie the
+        model would repeat verbatim."""
+        s = detect_stale(self.minutely(40, 20, 200), now=NOW, config=DetectorConfig())
+        assert "15 minutes" not in s.detail
+        assert "60 minutes" in s.detail or "60m" in s.detail
+
+    def test_a_fast_source_still_gets_the_floor(self):
+        """3x a 10-second cadence would be a 30-second hair trigger; the configured
+        floor protects sources that report far faster than the loop."""
+        samples = [Sample(ts=NOW - timedelta(seconds=10 * (60 - i)), value=1.0)
+                   for i in range(60)]
+        assert detect_stale(samples, now=NOW, config=DetectorConfig()) is None
+        late = [Sample(ts=NOW - timedelta(minutes=20) - timedelta(seconds=10 * (60 - i)),
+                       value=1.0) for i in range(60)]
+        assert detect_stale(late, now=NOW, config=DetectorConfig()) is not None
+
+    def test_too_little_history_falls_back_to_the_fixed_bar(self):
+        """Two samples cannot establish a cadence, so the configured floor applies."""
+        two = [Sample(ts=NOW - timedelta(minutes=40), value=1.0),
+               Sample(ts=NOW - timedelta(minutes=20), value=1.0)]
+        assert detect_stale(two, now=NOW, config=DetectorConfig()) is not None
+
+    def test_a_dead_producer_is_still_caught(self):
+        """The regression that matters: 19 days of silence must still fire however
+        the threshold is derived."""
+        s = detect_stale(self.minutely(40, 20, 19 * 24 * 60),
+                         now=NOW, config=DetectorConfig())
+        assert s is not None and s.score >= 4.0
+
+    def test_an_absent_source_is_unaffected(self):
+        s = detect_stale([], now=NOW, config=DetectorConfig())
+        assert s is not None and s.sample_count == 0
+
+    def test_the_multiple_is_configurable(self):
+        samples = self.minutely(40, 20, 50)
+        tight = DetectorConfig(stale_interval_multiple=2.0)   # 40m bar -> fires
+        loose = DetectorConfig(stale_interval_multiple=6.0)   # 120m bar -> quiet
+        assert detect_stale(samples, now=NOW, config=tight) is not None
+        assert detect_stale(samples, now=NOW, config=loose) is None
+
+
 class TestLevelShift:
     def test_fires_on_step_change(self):
         baseline = [50.0] * 40
